@@ -18,7 +18,14 @@ export default {
       if (req.headers.get('X-A2A-Notification-Token') !== env.PUSH_TOKEN) return json({ error: 'bad token' }, 401);
       const task: any = await req.json().catch(() => null);
       console.log('push received', task?.id, task?.status?.state);
+      // 占位：把最近一次 push 摘要存到 Cache API（同 colo 可读），供 /api/last-push 验证
+      const summary = { at: new Date().toISOString(), id: task?.id, state: task?.status?.state, text: JSON.stringify(task?.status?.message?.parts ?? task?.artifacts ?? null).slice(0, 2000) };
+      await caches.default.put(new Request(`${url.origin}/__last-push`), new Response(JSON.stringify(summary), { headers: { 'content-type': 'application/json', 'cache-control': 'max-age=3600' } }));
       return json({ ok: true, note: 'placeholder: full L1 wake-up not ported yet' });
+    }
+    if (url.pathname === '/api/last-push') {
+      const hit = await caches.default.match(new Request(`${url.origin}/__last-push`));
+      return hit ? json(await hit.json()) : json({ none: true }, 404);
     }
     if (url.pathname === '/api/ping-l2' && req.method === 'POST') {
       // 手动触发一次 A2A 非阻塞派发，回调到本 Worker

@@ -118,3 +118,13 @@ spawn `dsh --profile acp`，然后依次 initialize → session/new → session/
 - L1 `/api/health` → `split:true`；L2 `/api/health` → `role:l2, harness cloud/local:true`
 - 任务「创建 hello.txt 写入 split-ok」：L1 A2A `message/send(blocking:false)` → L2 dsh harness (write/read) → L2 push POST → L1 callback 200 → `session.sendSignal` → L1 **主动** SSE 回复「处理好了…内容 split-ok」，用户无追问。约 50 s。
 - 日志：`docs/split-process-events.txt`
+
+
+## 跨机：CF Worker L1 占位 ↔ 本机 L2（2026-11-02 01:40 UTC+8）
+- Worker: https://mastra-l1.summersmile1984.workers.dev （wrangler 4.156.0，API token 部署；secrets: PUSH_TOKEN / L2_A2A_URL / DEEPSEEK_API_KEY via `wrangler secret bulk`）
+- L2: `L2_PUSH_ALLOWLIST=https://mastra-l1.summersmile1984.workers.dev/api/a2a-callback npm run start:l2`（:4121）
+- `GET /api/health` → `{"ok":true,"deepseekKey":true,"pushToken":true,...}` ✅
+- `POST /api/a2a-callback` 错 token → 401 ✅
+- 本机 L2 `message/send`（blocking:false，pushNotificationConfig.url=Worker 回调）→ 任务 completed，artifact `pong`；L2 日志 `push delivered status 200`；Worker `GET /api/last-push` 返回 `state:completed, text: pong` ✅（L2→Worker 公网推送打通）
+- ❌ Worker→L2：`cloudflared tunnel --url http://127.0.0.1:4121`（含 `--protocol http2`）在本验证机连不上 Cloudflare edge（端口 7844 被出网策略封锁，precheck hard_fail），trycloudflare 返回 Error 1033，因此 `/api/ping-l2` 及 health 里的 l2 字段未通。在普通云电脑上起 tunnel 后 `wrangler secret put L2_A2A_URL` 即可重测。
+- ❌ 完整 Mastra L1（AgentController/UI/SSE/存储）仍未移植到 Workers，Worker 只是占位（回调仅记录到 Cache API，不唤醒会话）。

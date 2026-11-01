@@ -11,7 +11,9 @@
 |---|---|
 | 同机一进程 `npm start` | ✅ 已验证 |
 | 同机两进程 `start:l2` + `start:l1` (`L2_A2A_URL`) | ✅ 已验证（见 RESULTS.md「跨进程」） |
-| CF Worker 占位 `cf/worker.ts`：health / 回调验 token / 手动派发 L2 | 🟡 代码就绪，需 `wrangler login` 后部署 |
+| CF Worker 占位 `cf/worker.ts`：health / 回调验 token / 手动派发 L2 / `/api/last-push` | ✅ 已部署 https://mastra-l1.summersmile1984.workers.dev （API token 非交互 deploy） |
+| L2 → Worker A2A push（公网回调 + token 校验） | ✅ 已验证（2026-11-02） |
+| Worker → L2 经 trycloudflare 快速隧道 | ❌ 本验证环境出网封锁 argotunnel 7844（QUIC/HTTP2 均失败，Error 1033）；需在可出网机器上重跑 |
 | 完整 L1（Mastra AgentController + UI + SSE）跑在 Workers | ❌ 待移植 |
 
 ## 1. 云电脑起 L2 并用 tunnel 暴露
@@ -31,7 +33,7 @@ cloudflared tunnel --url http://127.0.0.1:4121          # 快速隧道，得到 
 ## 2. 部署 L1 占位 Worker
 ```bash
 npm i -D wrangler
-npx wrangler login
+npx wrangler login   # 或非交互：export CLOUDFLARE_API_TOKEN=... CLOUDFLARE_ACCOUNT_ID=...（勿入库）
 npx wrangler secret put DEEPSEEK_API_KEY
 npx wrangler secret put PUSH_TOKEN        # openssl rand -hex 32 生成
 npx wrangler secret put L2_A2A_URL        # https://xxx.trycloudflare.com

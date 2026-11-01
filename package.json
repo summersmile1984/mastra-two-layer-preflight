@@ -27,7 +27,8 @@
   },
   "devDependencies": {
     "@types/node": "22.15.0",
-    "tsx": "4.23.15"
+    "tsx": "4.23.15",
+    "wrangler": "^4.156.0"
   },
   "license": "MIT"
 }
