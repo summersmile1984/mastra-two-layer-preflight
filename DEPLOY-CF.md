@@ -86,3 +86,13 @@ Why: on this box, egress rewrites argotunnel DNS to 198.18.0.1 and TLS gets EOF,
 E2E on the box: generate → queued → claim → runAcpPrompt → callback → /l2-results.
 - DRY-RUN: passed ("hello.txt 已经处理好了，里面写的是 hi。")
 - Real dsh ACP (`echo pull-ok-42`): passed ("命令跑完了，输出是：pull-ok-42"), ~25s
+
+## Mac L2 via cloudflared tunnel (DNS-poisoned workers.dev)
+
+The Mac's resolver (114.114.114.114) returns poisoned IPs for `*.workers.dev`, so L2 → `/a2a-callback` push notifications cannot reach the Worker (cloudflare.com itself resolves fine).
+To keep completion working without Mac outbound to workers.dev:
+
+- Worker secret `L2_A2A_URL` = the cloudflared tunnel URL (quick tunnels change on restart — re-set the secret).
+- After a successful A2A `message/send`, the Worker schedules `waitUntil(pollL2(id))` (from `cloudflare:workers`), which polls L2 through the tunnel with A2A `tasks/get` until the task is terminal, then writes D1 and composes the reply.
+- `/a2a-callback` stays as the push path and is idempotent with the poller (whichever lands first wins). L2's push sender timeout is 30s.
+- Later: put L1 on a custom domain (not workers.dev) and point `L2_PUSH_ALLOWLIST` / `L1_PUBLIC_URL` at it so push works directly.

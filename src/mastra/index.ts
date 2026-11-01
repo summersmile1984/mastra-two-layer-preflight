@@ -23,7 +23,7 @@
  * 受 Worker CPU/墙钟限制，DeepSeek 一次调用通常 <30s）+ D1 落盘，是 Workers 上能稳定跑的方案。
  * 即使 generate 失败，原始 result 仍在 D1，前端会退化显示原始结果。
  */
-import { env } from 'cloudflare:workers';
+import { env, waitUntil } from 'cloudflare:workers';
 import { timingSafeEqual } from 'node:crypto';
 import { Mastra } from '@mastra/core';
 import { Agent } from '@mastra/core/agent';
@@ -33,6 +33,7 @@ import { CloudflareDeployer } from '@mastra/deployer-cloudflare';
 import { D1Store } from '@mastra/cloudflare-d1';
 import { Memory } from '@mastra/memory';
 import { z } from 'zod';
+import { pollL2Task } from '../l1/poll-l2';
 
 const E = env as any;
 const L2_AGENT_ID = 'l2-worker';
@@ -92,6 +93,8 @@ const dispatch_to_sandbox = createTool({
             const u = await d.prepare("UPDATE l2_tasks SET task_id=?, state=?, updated_at=? WHERE task_id=? AND state='queued'")
               .bind(j.result.id, j.result.status?.state ?? 'submitted', Date.now(), taskId).run();
             console.log('[L1] pushed via A2A', JSON.stringify({ taskId, l2TaskId: j.result.id, changed: u?.meta?.changes }));
+            // Mac 侧 DNS 污染 workers.dev → push 回调可能到不了；Worker 经 tunnel 主动 tasks/get 轮询兜底（幂等）
+            try { waitUntil(pollL2(String(j.result.id))); } catch (e: any) { console.log('[L1] waitUntil unavailable', String(e?.message ?? e)); }
           } else console.log('[L1] A2A push failed, left queued for pull', JSON.stringify({ status: r.status, err: j?.error?.message }));
         } catch (e: any) { console.log('[L1] A2A push error, left queued for pull', String(e?.message ?? e).slice(0, 160)); }
       }
@@ -122,7 +125,37 @@ const reqToken = (c: any) => {
   const auth = c.req.header('Authorization') ?? '';
   return auth.startsWith('Bearer ') ? auth.slice(7) : c.req.header('X-A2A-Notification-Token');
 };
+
 const TERMINAL = ['completed', 'failed', 'canceled', 'rejected'];
+const extractTask = (task: any) => {
+  let text = (task.artifacts ?? []).flatMap((a: any) => a.parts ?? []).filter((p: any) => p.kind === 'text').map((p: any) => p.text).join('\n')
+    || task.status?.message?.parts?.map((p: any) => p.text).join('') || '';
+  let state = String(task.status?.state ?? '');
+  if (state === 'completed' && text.startsWith('【L2失败】')) { state = 'failed'; text = text.slice(6); }
+  return { state, text };
+};
+/** 写入终态并 compose 回复；幂等（已终态则忽略）。返回 compose promise（若有） */
+const finalizeTask = async (taskId: string, state: string, text: string, src: string): Promise<{ ignored?: string; compose?: Promise<void> }> => {
+  const { d, ready } = db(); await ready;
+  const rec: any = await d.prepare('SELECT * FROM l2_tasks WHERE task_id=?').bind(taskId).first();
+  console.log('[L1] finalize', JSON.stringify({ src, taskId, state, known: !!rec, chars: text.length }));
+  if (!rec) return { ignored: 'unknown task' };
+  if (TERMINAL.includes(rec.state)) return { ignored: 'duplicate' };
+  const u = await d.prepare(`UPDATE l2_tasks SET state=?, result=?, updated_at=? WHERE task_id=? AND state NOT IN ('completed','failed','canceled','rejected')`)
+    .bind(state, text.slice(0, 20000), Date.now(), taskId).run();
+  if (!TERMINAL.includes(state) || !u?.meta?.changes) return {};
+  const compose = (async () => {
+    try {
+      const res: any = await orchestrator.generate(
+        `<sandbox-result state="${state}">${text.slice(0, 8000)}</sandbox-result>\n（这是后台任务的结果通知，不是用户消息；请直接向用户简要汇报）`,
+        { memory: { thread: rec.thread_id, resource: rec.resource_id ?? rec.thread_id }, maxSteps: 1 } as any);
+      await d.prepare('UPDATE l2_tasks SET reply=?, updated_at=? WHERE task_id=?').bind(String(res?.text ?? '').slice(0, 8000), Date.now(), taskId).run();
+    } catch (e: any) { console.log('[L1] compose failed', String(e?.message ?? e).slice(0, 200)); }
+  })();
+  return { compose };
+};
+/** Worker → tunnel → L2 A2A tasks/get 轮询，直到终态或超时 */
+const pollL2 = (id: string) => pollL2Task(id, { url: () => normL2(String(E.L2_A2A_URL)), getState: async (tid) => { const { d, ready } = db(); await ready; return ((await d.prepare('SELECT state FROM l2_tasks WHERE task_id=?').bind(tid).first()) as any)?.state ?? null; }, terminal: TERMINAL, extract: extractTask, finalize: finalizeTask });
 
 export const mastra = new Mastra({
   agents: { orchestrator },
@@ -168,27 +201,10 @@ export const mastra = new Mastra({
           if (!tokenOk(reqToken(c))) { console.log('[L1] callback REJECTED bad token'); return c.json({ error: 'bad token' }, 401); }
           const task: any = await c.req.json().catch(() => null);
           if (!task?.id || !task?.status?.state) return c.json({ error: 'bad payload' }, 400);
-          let text = (task.artifacts ?? []).flatMap((a: any) => a.parts ?? []).filter((p: any) => p.kind === 'text').map((p: any) => p.text).join('\n')
-            || task.status?.message?.parts?.map((p: any) => p.text).join('') || '';
-          let state = String(task.status.state);
-          if (state === 'completed' && text.startsWith('【L2失败】')) { state = 'failed'; text = text.slice(6); }
-          const { d, ready } = db(); await ready;
-          const rec: any = await d.prepare('SELECT * FROM l2_tasks WHERE task_id=?').bind(task.id).first();
-          console.log('[L1] callback', JSON.stringify({ taskId: task.id, state, known: !!rec, chars: text.length }));
-          if (!rec) return c.json({ ok: true, ignored: 'unknown task' });
-          if (TERMINAL.includes(rec.state)) return c.json({ ok: true, ignored: 'duplicate' }); // 幂等
-          await d.prepare('UPDATE l2_tasks SET state=?, result=?, updated_at=? WHERE task_id=?').bind(state, text.slice(0, 20000), Date.now(), task.id).run();
-          if (TERMINAL.includes(state)) {
-            const compose = (async () => {
-              try {
-                const res: any = await orchestrator.generate(
-                  `<sandbox-result state="${state}">${text.slice(0, 8000)}</sandbox-result>\n（这是后台任务的结果通知，不是用户消息；请直接向用户简要汇报）`,
-                  { memory: { thread: rec.thread_id, resource: rec.resource_id ?? rec.thread_id }, maxSteps: 1 } as any);
-                await d.prepare('UPDATE l2_tasks SET reply=?, updated_at=? WHERE task_id=?').bind(String(res?.text ?? '').slice(0, 8000), Date.now(), task.id).run();
-              } catch (e: any) { console.log('[L1] compose failed', String(e?.message ?? e).slice(0, 200)); }
-            })();
-            try { c.executionCtx.waitUntil(compose); } catch { await compose; }
-          }
+          const { state, text } = extractTask(task);
+          const f = await finalizeTask(String(task.id), state, text, 'callback');
+          if (f.ignored) return c.json({ ok: true, ignored: f.ignored });
+          if (f.compose) { try { c.executionCtx.waitUntil(f.compose); } catch { await f.compose; } }
           return c.json({ ok: true });
         },
       } as any),
