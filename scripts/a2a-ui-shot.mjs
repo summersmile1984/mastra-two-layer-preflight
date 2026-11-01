@@ -1,0 +1,13 @@
+import { spawn } from 'node:child_process'; import { writeFileSync } from 'node:fs';
+const ch = spawn('google-chrome', ['--headless=new','--no-sandbox','--remote-debugging-port=9333','--window-size=900,1000','--user-data-dir=/tmp/a2a-chrome','about:blank']);
+await new Promise(r=>setTimeout(r,2500));
+const tabs = await (await fetch('http://127.0.0.1:9333/json')).json();
+const ws = new WebSocket(tabs.find(t=>t.type==='page').webSocketDebuggerUrl); await new Promise(r=>ws.onopen=r);
+let id=0; const pend=new Map(); ws.onmessage=e=>{const m=JSON.parse(e.data); pend.get(m.id)?.(m.result); };
+const cmd=(method,params={})=>new Promise(r=>{const i=++id; pend.set(i,r); ws.send(JSON.stringify({id:i,method,params}));});
+await cmd('Page.navigate',{url:'http://127.0.0.1:4120/'}); await new Promise(r=>setTimeout(r,3000));
+await cmd('Runtime.evaluate',{expression:"send('帮我列出当前目录的文件，并写一个 a2a-ui.txt 内容为 notified by A2A')"});
+const shot=async f=>{const r=await cmd('Page.captureScreenshot',{format:'png'}); writeFileSync(f,Buffer.from(r.data,'base64')); console.log('saved',f);};
+await new Promise(r=>setTimeout(r,8000)); await shot('screenshots/a2a-ui-dispatched.png');
+await new Promise(r=>setTimeout(r,60000)); await shot('screenshots/a2a-ui-completed.png');
+ch.kill(); process.exit(0);

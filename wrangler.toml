@@ -1,0 +1,9 @@
+# 最小 L1 占位 Worker。Secrets 用 `wrangler secret put`，不要写进本文件。
+name = "mastra-l1"
+main = "cf/worker.ts"
+compatibility_date = "2026-10-01"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+# L2_A2A_URL 也可作为 secret；tunnel 地址不敏感时放这里
+# L2_A2A_URL = "https://l2.example.com"

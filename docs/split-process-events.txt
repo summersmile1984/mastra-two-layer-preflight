@@ -1,0 +1,14 @@
+> L2_A2A_URL=${L2_A2A_URL:-http://127.0.0.1:4121} tsx --env-file-if-exists=.env src/server.ts
+L1 only (L2 remote) preflight on http://localhost:4120  (L2_MODE=a2a, push=allowlist, dev=true)
+[A2A] L1 dispatched via A2A message/send (blocking:false) {"taskId":"a0c4863a-0115-4f61-8e7a-5134dfd737b1","state":"working","sessionId":"split-1793552540"}
+[A2A] callback received {"taskId":"a0c4863a-0115-4f61-8e7a-5134dfd737b1","state":"completed","known":true,"chars":278}
+[A2A] L1 woken via session.sendSignal {"sessionId":"split-1793552540"}
+L2 (A2A+ACP) on http://localhost:4121/api/a2a/l2-worker  push=allowlist
+[A2A] harness tool_call {"title":"write"}
+[A2A] harness tool_call {"title":"read"}
+[A2A] harness tool_call {"title":"write"}
+[A2A] harness tool_call {"title":"read"}
+[A2A] push POST {"taskId":"a0c4863a-0115-4f61-8e7a-5134dfd737b1","state":"completed","url":"http://127.0.0.1:4120/api/a2a-callback"}
+[A2A] push delivered {"status":200}
+data: {"kind":"l1","text":"已经派发，我来处理，完成后告诉你文件内容。","at":"2026-11-01T17:02:24.617Z"}
+data: {"kind":"l1","text":"处理好了。\n\n`hello.txt` 已创建（原文件已存在，内容为 `hello`，现已覆盖），当前内容为：\n\n```\nsplit-ok\n```\n\n文件共 1 行，无额外换行。","at":"2026-11-01T17:02:34.837Z"}
