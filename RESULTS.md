@@ -134,3 +134,6 @@ spawn `dsh --profile acp`，然后依次 initialize → session/new → session/
 - 前端直接调 Mastra 内置 `POST /api/agents/orchestrator/stream`（SSE，`text-delta.payload.text`），`memory:{thread:sid,resource:'web-'+sid}`，记忆在 D1。
 - 实测：「我叫小王，记住」→「好的，小王，记住了。有什么事随时说。」；同 thread「我叫什么？」→「你叫小王。」
 - 未做：L2/A2A、HITL 密码表单、截图（UI 里对应的快捷按钮在 CF 版只会走普通对话）。
+
+## P2 进度（2026-11-02）
+Worker 侧 dispatch_to_sandbox + `/a2a-callback`（无 /api 前缀）+ D1 `l2_tasks` + waitUntil 生成汇报 + 前端轮询 `/l2-results` 已部署并验证；L2 核心路径（A2A + @mastra/acp → dsh）未改。缺：L2 公网入口（tunnel）后更新 Worker secret `L2_A2A_URL` 即可端到端。详见 DEPLOY-CF.md「P2」。

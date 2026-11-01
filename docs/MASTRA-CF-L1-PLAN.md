@@ -121,3 +121,6 @@ export const mastra = new Mastra({
 - 官方没有单独的 CF starter 仓库。最接近的做法是 `npx create-mastra@latest`，再按上面的方式加 CloudflareDeployer
 - Deployer 源码：https://github.com/mastra-ai/mastra/tree/main/deployers/cloudflare
 - Hono adapter 示例：https://mastra.ai/integrations/frameworks/hono.md
+
+## P2 进度（2026-11-02）
+Worker 侧 dispatch_to_sandbox + `/a2a-callback`（无 /api 前缀）+ D1 `l2_tasks` + waitUntil 生成汇报 + 前端轮询 `/l2-results` 已部署并验证；L2 核心路径（A2A + @mastra/acp → dsh）未改。缺：L2 公网入口（tunnel）后更新 Worker secret `L2_A2A_URL` 即可端到端。详见 DEPLOY-CF.md「P2」。

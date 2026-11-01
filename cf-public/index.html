@@ -61,6 +61,8 @@ async function send(x){const q=(x??$('#in').value).trim();if(!q)return;$('#in').
     if(ev.type==='text-delta'){txt+=ev.payload?.text??ev.textDelta??'';if(!el){bubble('bot','');el=W.lastElementChild.querySelector('.b')}el.textContent=txt;down()}
     else if(ev.type==='error'){sys('⚠️ '+JSON.stringify(ev.payload??ev).slice(0,200))}}}
   showTyping(false);if(!txt)sys('（空回复）')}catch(err){showTyping(false);sys('⚠️ '+err.message)}}
+// P2：轮询后台结果（Worker 无常驻 SSE；/l2-results 自定义路由无 /api 前缀）
+async function poll(){try{const r=await fetch('/l2-results?thread='+encodeURIComponent(sid));if(r.ok){const j=await r.json();setStatus({phase:j.busy?'background':'idle',busy:j.busy});(j.results||[]).forEach(x=>bubble('bot',x.text))}}catch{}setTimeout(poll,4000)}poll();
 $('#go').onclick=()=>send();$('#in').onkeydown=e=>{if(e.key==='Enter'&&!e.isComposing)send()};
 ['帮我统计当前目录有多少文件并写一个 hello.txt','你好，还在吗？','补充: 顺便告诉我 hello.txt 的字节数','查进度','在本地跑：列出 node 版本','在本地帮我做一个咖啡店落地页并截图','我要提供数据库密码'].forEach(c=>{const b=document.createElement('button');b.textContent=c;b.onclick=()=>send(c);$('#chips').append(b)});
 </script></body></html>

@@ -59,3 +59,16 @@ curl -XPOST https://mastra-l1.<you>.workers.dev/api/ping-l2 -d '回复 pong'   #
 - 截图：L2 产物需随 A2A artifact（FilePart/base64）回传或写 R2，L1 不能再读本地 `workspace-l2/`；Chrome 兜底移到 L2。
 - HITL secretRef：明文目前在 L1 内存，跨机需加密随任务下发（如用 L2 公钥封装）。
 - 账号：需要 Cloudflare 账号 + `wrangler login`（本仓库未部署）。
+
+## P2：Worker 侧派发 + A2A 回调（2026-11-02）
+- 状态：✅ 已部署（Worker 侧完整）；⏳ 端到端待 L2 公网入口（tunnel）。
+- `src/mastra/index.ts`：orchestrator 加工具 `dispatch_to_sandbox`（A2A `message/send`，`blocking:false` + `pushNotificationConfig`）；指令与 Node L1 一致（慢任务派发/闲聊直回/不提内部细节）。
+- 任务登记：D1 表 `l2_tasks`（taskId → thread/resource、state、result、reply、delivered；首次访问自动建表）。
+- **回调真实 URL：`https://mastra-l1.summersmile1984.workers.dev/a2a-callback`**（registerApiRoute 自定义路由**不带 `/api` 前缀**，同 `/health-l1`）。校验 `X-A2A-Notification-Token` 与 secret `PUSH_TOKEN`（timing-safe），按 taskId 幂等。
+- 回调后：D1 写 result → `ctx.waitUntil(orchestrator.generate(<sandbox-result>…, 同 thread memory))` 生成汇报，写入 D1 `reply` 并进入 thread 记忆；前端每 4s 轮询 `GET /l2-results?thread=<sid>` 显示（generate 失败 60s 后退化显示原始结果）。
+- 配置：
+  - Worker secret `L2_A2A_URL` = L2 公网根地址（如 `https://l2.xxx.trycloudflare.com`，自动补 `/api/a2a/l2-worker`）
+  - Worker secret `PUSH_TOKEN` = 随机串（本机副本 `~/.config/cloudflare/mastra-l1-push-token`，不入 git）；L2 侧无需知道，它原样回传
+  - Worker var `L1_PUBLIC_URL`（CloudflareDeployer vars，默认本 Worker 域名）决定回调地址
+  - L2：`L2_PUSH_ALLOWLIST=https://mastra-l1.summersmile1984.workers.dev/a2a-callback`（必须与上面完全一致）
+- 验证：L2(4122, ACP_DRY_RUN=1) → Worker `/a2a-callback` push 200；模拟已登记任务回调 → reply 生成并经 `/l2-results` 取回、重复回调 `duplicate`；错 token 401；Worker generate 触发工具，L2 不可达时返回 `ok:false` 并对用户优雅说明（不崩）。
