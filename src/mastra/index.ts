@@ -8,12 +8,15 @@ import { Agent } from '@mastra/core/agent';
 import { registerApiRoute } from '@mastra/core/server';
 import { CloudflareDeployer } from '@mastra/deployer-cloudflare';
 import { D1Store } from '@mastra/cloudflare-d1';
+import { Memory } from '@mastra/memory';
 
 const orchestrator = new Agent({
   id: 'orchestrator',
   name: 'orchestrator',
   instructions: '你是 L1 总管，简短中文回复；闲聊直接回。',
   model: 'deepseek/deepseek-chat',
+  // 会话记忆：使用 Mastra 实例的 D1Store；thread = 前端 sid
+  memory: new Memory({ options: { lastMessages: 20 } }),
 });
 
 export const mastra = new Mastra({

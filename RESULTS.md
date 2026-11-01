@@ -128,3 +128,9 @@ spawn `dsh --profile acp`，然后依次 initialize → session/new → session/
 - 本机 L2 `message/send`（blocking:false，pushNotificationConfig.url=Worker 回调）→ 任务 completed，artifact `pong`；L2 日志 `push delivered status 200`；Worker `GET /api/last-push` 返回 `state:completed, text: pong` ✅（L2→Worker 公网推送打通）
 - ❌ Worker→L2：`cloudflared tunnel --url http://127.0.0.1:4121`（含 `--protocol http2`）在本验证机连不上 Cloudflare edge（端口 7844 被出网策略封锁，precheck hard_fail），trycloudflare 返回 Error 1033，因此 `/api/ping-l2` 及 health 里的 l2 字段未通。在普通云电脑上起 tunnel 后 `wrangler secret put L2_A2A_URL` 即可重测。
 - ❌ 完整 Mastra L1（AgentController/UI/SSE/存储）仍未移植到 Workers，Worker 只是占位（回调仅记录到 Cache API，不唤醒会话）。
+
+## CF Worker P1（2026-11-02）
+- `/` 由 Workers Static Assets 提供（`cf-public/index.html`；CloudflareDeployer 不支持 assets，用 `scripts/cf-postbuild.mjs` 在 build 后给 `.mastra/output/wrangler.json` 补 `assets`）。
+- 前端直接调 Mastra 内置 `POST /api/agents/orchestrator/stream`（SSE，`text-delta.payload.text`），`memory:{thread:sid,resource:'web-'+sid}`，记忆在 D1。
+- 实测：「我叫小王，记住」→「好的，小王，记住了。有什么事随时说。」；同 thread「我叫什么？」→「你叫小王。」
+- 未做：L2/A2A、HITL 密码表单、截图（UI 里对应的快捷按钮在 CF 版只会走普通对话）。
