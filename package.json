@@ -10,6 +10,7 @@
     "acp:probe": "tsx --env-file-if-exists=.env scripts/acp-probe.ts",
     "start:all": "tsx --env-file-if-exists=.env src/server.ts",
     "start:l1": "L2_A2A_URL=${L2_A2A_URL:-http://127.0.0.1:4121} tsx --env-file-if-exists=.env src/server.ts",
+    "start:l2-pull": "tsx --env-file-if-exists=.env src/l2-pull-worker.ts",
     "start:l2": "tsx --env-file-if-exists=.env src/l2-server.ts",
     "cf:deploy": "npm run cf:build && wrangler deploy -c .mastra/output/wrangler.json",
     "cf:build": "mastra build && node scripts/cf-postbuild.mjs"

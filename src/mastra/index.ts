@@ -2,7 +2,15 @@
  * L1 on Cloudflare Workers：官方 CloudflareDeployer + D1。
  * 仅用于 `mastra build`；本地 Node 版仍走 src/server.ts（AgentController + sendSignal）。
  *
- * P2（Worker 侧派发 + 回调）：
+ * P3（主路径 = L2 出站 PULL；本机出口劫持 argotunnel DNS，cloudflared 不可用）：
+ *   dispatch_to_sandbox 本地生成 task_id（t-<uuid>），D1 l2_tasks 写入 state=queued + prompt，立即 ok:true
+ *     （只需 PUSH_TOKEN + thread；不要求 L2_A2A_URL 可达）
+ *   本机 L2（src/l2-pull-worker.ts）轮询 POST /l2-claim（Bearer/X-A2A-Notification-Token = PUSH_TOKEN）
+ *     → 原子 queued→working，返回 {taskId,prompt,runtime,threadId}（无任务 {task:null}）
+ *     → runAcpPrompt（dsh --profile acp）→ POST /a2a-callback（A2A Task 形状）→ 下面原有 compose + /l2-results 不变
+ *   若配置了 L2_A2A_URL：额外 best-effort A2A push（成功则改用 L2 的 task id；失败仅记日志，留给 pull）
+ *
+ * P2（Worker 侧派发 + 回调，现为可选 push 路径）：
  *   orchestrator 工具 dispatch_to_sandbox → HTTP POST ${L2_A2A_URL}/api/a2a/l2-worker
  *     A2A message/send { configuration:{ blocking:false, pushNotificationConfig:{ url: <L1>/a2a-callback, token: PUSH_TOKEN } } }
  *   → D1 表 l2_tasks 登记 taskId → thread/resource（不用 in-memory Map：Worker isolate 随时被回收/多实例）
@@ -40,7 +48,9 @@ function db() {
   schemaReady ??= d.prepare(`CREATE TABLE IF NOT EXISTS l2_tasks (
     task_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, resource_id TEXT, runtime TEXT, state TEXT NOT NULL,
     result TEXT, reply TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, delivered INTEGER NOT NULL DEFAULT 0)`).run()
-    .then(() => d.prepare('CREATE INDEX IF NOT EXISTS l2_tasks_thread ON l2_tasks(thread_id, updated_at)').run());
+    .then(() => d.prepare('CREATE INDEX IF NOT EXISTS l2_tasks_thread ON l2_tasks(thread_id, updated_at)').run())
+    .then(() => d.prepare('ALTER TABLE l2_tasks ADD COLUMN prompt TEXT').run().catch(() => null))
+    .then(() => d.prepare('CREATE INDEX IF NOT EXISTS l2_tasks_state ON l2_tasks(state, created_at)').run());
   return { d, ready: schemaReady };
 }
 
@@ -59,25 +69,33 @@ const dispatch_to_sandbox = createTool({
   execute: async ({ prompt, runtime }, ctx: any) => {
     const threadId: string | undefined = ctx?.agent?.threadId ?? ctx?.threadId;
     const resourceId: string | undefined = ctx?.agent?.resourceId ?? ctx?.resourceId;
-    if (!E.L2_A2A_URL) return { ok: false, reason: '后台执行端未配置（L2_A2A_URL 未设置）' };
     if (!E.PUSH_TOKEN) return { ok: false, reason: '后台回调未配置（PUSH_TOKEN 未设置）' };
     if (!threadId) return { ok: false, reason: '缺少会话 thread，无法回传结果' };
+    const text = runtime === 'local' ? `本地 ${prompt}` : prompt;
+    const taskId = `t-${crypto.randomUUID()}`; const now = Date.now();
     try {
-      const r = await fetch(normL2(String(E.L2_A2A_URL)), {
-        method: 'POST', signal: AbortSignal.timeout(15000), headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ jsonrpc: '2.0', id: crypto.randomUUID(), method: 'message/send', params: {
-          message: { kind: 'message', role: 'user', messageId: crypto.randomUUID(), parts: [{ kind: 'text', text: runtime === 'local' ? `本地 ${prompt}` : prompt }] },
-          configuration: { blocking: false, pushNotificationConfig: { url: callbackUrl(), token: String(E.PUSH_TOKEN) } },
-        } }),
-      });
-      const j: any = await r.json().catch(() => null);
-      if (!r.ok || !j || j.error || !j.result?.id) return { ok: false, reason: `后台暂不可用（${j?.error?.message ?? 'HTTP ' + r.status}）`.slice(0, 200) };
-      const t = j.result; const now = Date.now();
       const { d, ready } = db(); await ready;
-      await d.prepare('INSERT OR REPLACE INTO l2_tasks (task_id,thread_id,resource_id,runtime,state,created_at,updated_at) VALUES (?,?,?,?,?,?,?)')
-        .bind(t.id, threadId, resourceId ?? null, runtime, t.status?.state ?? 'submitted', now, now).run();
-      console.log('[L1] dispatched', JSON.stringify({ taskId: t.id, state: t.status?.state, threadId }));
-      return { ok: true, status: t.status?.state ?? 'submitted', runtime };
+      await d.prepare('INSERT INTO l2_tasks (task_id,thread_id,resource_id,runtime,state,prompt,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)')
+        .bind(taskId, threadId, resourceId ?? null, runtime, 'queued', text, now, now).run();
+      console.log('[L1] queued', JSON.stringify({ taskId, threadId, runtime }));
+      if (E.L2_A2A_URL) {
+        try {
+          const r = await fetch(normL2(String(E.L2_A2A_URL)), {
+            method: 'POST', signal: AbortSignal.timeout(8000), headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ jsonrpc: '2.0', id: crypto.randomUUID(), method: 'message/send', params: {
+              message: { kind: 'message', role: 'user', messageId: crypto.randomUUID(), parts: [{ kind: 'text', text }] },
+              configuration: { blocking: false, pushNotificationConfig: { url: callbackUrl(), token: String(E.PUSH_TOKEN) } },
+            } }),
+          });
+          const j: any = await r.json().catch(() => null);
+          if (r.ok && j?.result?.id) {
+            const u = await d.prepare("UPDATE l2_tasks SET task_id=?, state=?, updated_at=? WHERE task_id=? AND state='queued'")
+              .bind(j.result.id, j.result.status?.state ?? 'submitted', Date.now(), taskId).run();
+            console.log('[L1] pushed via A2A', JSON.stringify({ taskId, l2TaskId: j.result.id, changed: u?.meta?.changes }));
+          } else console.log('[L1] A2A push failed, left queued for pull', JSON.stringify({ status: r.status, err: j?.error?.message }));
+        } catch (e: any) { console.log('[L1] A2A push error, left queued for pull', String(e?.message ?? e).slice(0, 160)); }
+      }
+      return { ok: true, status: 'queued', runtime };
     } catch (e: any) {
       return { ok: false, reason: `后台暂不可用（${String(e?.message ?? e).slice(0, 120)}）` };
     }
@@ -100,6 +118,10 @@ const tokenOk = (got?: string | null) => {
   const a = Buffer.from(got), b = Buffer.from(want);
   return a.length === b.length && timingSafeEqual(a, b);
 };
+const reqToken = (c: any) => {
+  const auth = c.req.header('Authorization') ?? '';
+  return auth.startsWith('Bearer ') ? auth.slice(7) : c.req.header('X-A2A-Notification-Token');
+};
 const TERMINAL = ['completed', 'failed', 'canceled', 'rejected'];
 
 export const mastra = new Mastra({
@@ -117,14 +139,33 @@ export const mastra = new Mastra({
       registerApiRoute('/health-l1', {
         method: 'GET',
         requiresAuth: false,
-        handler: async (c) => c.json({ ok: true, role: 'l1-mastra-cf', l2Configured: !!E.L2_A2A_URL, pushToken: !!E.PUSH_TOKEN, callback: callbackUrl() }),
+        handler: async (c) => {
+          let queued: number | null = null;
+          try { const { d, ready } = db(); await ready; queued = ((await d.prepare("SELECT COUNT(*) n FROM l2_tasks WHERE state='queued'").first()) as any)?.n ?? 0; } catch {}
+          return c.json({ ok: true, role: 'l1-mastra-cf', pullMode: true, claim: `${publicBase()}/l2-claim`, queued, l2Configured: !!E.L2_A2A_URL, pushToken: !!E.PUSH_TOKEN, callback: callbackUrl() });
+        },
+      } as any),
+      // L2 出站 PULL：原子领取一个 queued 任务 → working
+      registerApiRoute('/l2-claim', {
+        method: 'POST',
+        requiresAuth: false,
+        handler: async (c: any) => {
+          if (!tokenOk(reqToken(c))) return c.json({ error: 'bad token' }, 401);
+          const { d, ready } = db(); await ready;
+          const row: any = await d.prepare(`UPDATE l2_tasks SET state='working', updated_at=?
+            WHERE task_id=(SELECT task_id FROM l2_tasks WHERE state='queued' ORDER BY created_at LIMIT 1) AND state='queued'
+            RETURNING task_id, prompt, runtime, thread_id`).bind(Date.now()).first();
+          if (!row) return c.json({ task: null });
+          console.log('[L1] claimed', JSON.stringify({ taskId: row.task_id }));
+          return c.json({ task: { taskId: row.task_id, prompt: row.prompt ?? '', runtime: row.runtime ?? 'cloud', threadId: row.thread_id } });
+        },
       } as any),
       // A2A push webhook（L2 → L1）。真实路径：/a2a-callback（无 /api 前缀）
       registerApiRoute('/a2a-callback', {
         method: 'POST',
         requiresAuth: false,
         handler: async (c: any) => {
-          if (!tokenOk(c.req.header('X-A2A-Notification-Token'))) { console.log('[L1] callback REJECTED bad token'); return c.json({ error: 'bad token' }, 401); }
+          if (!tokenOk(reqToken(c))) { console.log('[L1] callback REJECTED bad token'); return c.json({ error: 'bad token' }, 401); }
           const task: any = await c.req.json().catch(() => null);
           if (!task?.id || !task?.status?.state) return c.json({ error: 'bad payload' }, 400);
           let text = (task.artifacts ?? []).flatMap((a: any) => a.parts ?? []).filter((p: any) => p.kind === 'text').map((p: any) => p.text).join('\n')

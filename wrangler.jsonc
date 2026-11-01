@@ -20,7 +20,8 @@
   ],
   "main": "./.mastra/output/index.mjs",
   "vars": {
-    "NODE_ENV": "production"
+    "NODE_ENV": "production",
+    "L1_PUBLIC_URL": "https://mastra-l1.summersmile1984.workers.dev"
   },
   "alias": {
     "typescript": "./.mastra/output/typescript-stub.mjs",

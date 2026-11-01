@@ -124,3 +124,17 @@ export const mastra = new Mastra({
 
 ## P2 进度（2026-11-02）
 Worker 侧 dispatch_to_sandbox + `/a2a-callback`（无 /api 前缀）+ D1 `l2_tasks` + waitUntil 生成汇报 + 前端轮询 `/l2-results` 已部署并验证；L2 核心路径（A2A + @mastra/acp → dsh）未改。缺：L2 公网入口（tunnel）后更新 Worker secret `L2_A2A_URL` 即可端到端。详见 DEPLOY-CF.md「P2」。
+
+## P3 — L2 outbound PULL (2026-11-02, Worker version d3612acf-eaa3-4b3c-9cd6-ce12454279a6)
+
+Why: on this box, egress rewrites argotunnel DNS to 198.18.0.1 and TLS gets EOF, so cloudflared can't work. Outbound HTTPS to workers.dev does work.
+
+- `dispatch_to_sandbox` generates `t-<uuid>` and inserts a D1 `l2_tasks` row with `state=queued` and `prompt` (the column is added with `ALTER TABLE` when missing). It needs only PUSH_TOKEN and a thread. When `L2_A2A_URL` is set, it also tries an A2A push (best-effort). If that push fails, it only logs, and the task waits in the queue for pull.
+- `POST /l2-claim` (no /api prefix) takes `Authorization: Bearer <PUSH_TOKEN>` or `X-A2A-Notification-Token`. It atomically moves one task queued→working and returns `{task:{taskId,prompt,runtime,threadId}}` or `{task:null}`.
+- When done, L2 POSTs an A2A Task to `/a2a-callback` (`id`, `status.state`, `artifacts[].parts[].text`). Compose and `/l2-results` are unchanged.
+- `/health-l1` now reports `pullMode:true`, `claim`, and `queued`.
+- Local L2: `npm run start:l2-pull` (`src/l2-pull-worker.ts`). Env (in `.env`, gitignored): `L1_PULL_URL`, `PUSH_TOKEN`, `L2_PULL_INTERVAL_MS` (default 2000), and optional `ACP_DRY_RUN=1`.
+
+E2E on the box: generate → queued → claim → runAcpPrompt → callback → /l2-results.
+- DRY-RUN: passed ("hello.txt 已经处理好了，里面写的是 hi。")
+- Real dsh ACP (`echo pull-ok-42`): passed ("命令跑完了，输出是：pull-ok-42"), ~25s
