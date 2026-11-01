@@ -1,0 +1,33 @@
+{
+  /* This file was auto-generated through Mastra. Edit the CloudflareDeployer() instance directly. */
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "mastra-l1",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "observability": {
+    "logs": {
+      "enabled": true
+    }
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "mastra-l1",
+      "database_id": "26a19832-8ff9-4fe4-a253-9305ae02f6bb"
+    }
+  ],
+  "main": "./.mastra/output/index.mjs",
+  "vars": {
+    "NODE_ENV": "production"
+  },
+  "alias": {
+    "typescript": "./.mastra/output/typescript-stub.mjs",
+    "execa": "./execa-stub.mjs",
+    "readable-stream": "./readable-stream-stub.mjs",
+    "module": "./.mastra/output/module-stub.mjs",
+    "node:module": "./.mastra/output/module-stub.mjs",
+    "@opentelemetry/api": "./.mastra/output/opentelemetry-api-stub.mjs"
+  }
+}

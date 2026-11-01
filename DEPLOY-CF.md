@@ -14,7 +14,16 @@
 | CF Worker 占位 `cf/worker.ts`：health / 回调验 token / 手动派发 L2 / `/api/last-push` | ✅ 已部署 https://mastra-l1.summersmile1984.workers.dev （API token 非交互 deploy） |
 | L2 → Worker A2A push（公网回调 + token 校验） | ✅ 已验证（2026-11-02） |
 | Worker → L2 经 trycloudflare 快速隧道 | ❌ 本验证环境出网封锁 argotunnel 7844（QUIC/HTTP2 均失败，Error 1033）；需在可出网机器上重跑 |
-| 完整 L1（Mastra AgentController + UI + SSE）跑在 Workers | ❌ 待移植 |
+| **P0：Mastra L1 官方 CloudflareDeployer + D1**（`src/mastra/index.ts`，agent `orchestrator`，DeepSeek） | ✅ 已部署 https://mastra-l1.summersmile1984.workers.dev/api/agents ；`/health-l1`（自定义路由不带 `/api` 前缀） |
+| 完整 L1（AgentController + UI + SSE + A2A 回调）跑在 Workers | ⏳ P1+，见 [docs/MASTRA-CF-L1-PLAN.md](docs/MASTRA-CF-L1-PLAN.md) |
+
+## 0. L1 部署（P0）
+```bash
+# 需要 Node >= 22；CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID
+npm run cf:deploy            # mastra build → .mastra/output/wrangler.json → wrangler deploy
+npx wrangler secret put DEEPSEEK_API_KEY --name mastra-l1
+```
+D1：`mastra-l1`（binding `DB`）。原占位 `cf/worker.ts` 与根 `wrangler.toml` 已被 Mastra 版取代，归档到 `legacy/`（cf-worker.placeholder.ts / wrangler.placeholder.toml）。
 
 ## 1. 云电脑起 L2 并用 tunnel 暴露
 ```bash
