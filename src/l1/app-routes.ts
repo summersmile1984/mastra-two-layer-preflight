@@ -4,6 +4,7 @@
  *   /api/dev/otp           dev-only OTP read (AUTH_DEV_MODE=1)
  *   /api/rooms…            self-built rooms (session required)
  *   /api/butler/messages   private butler DM (session required)
+ *   /api/butler/profile    PATCH display_name (session required)
  *   /api/agents/:id/(generate|stream…)  now requires a session; DEV bypass: Bearer PUSH_TOKEN (L2 tests only)
  * Non-matching requests fall through to Mastra (L2 /l2-* and /a2a-callback untouched).
  */
@@ -16,17 +17,23 @@ export const CATALOG = [
   { id: 'researcher', name: '调研专家', desc: '调研/分析/归纳' },
   { id: 'coder', name: '工程师', desc: '编程/排错/技术方案' },
 ];
-const ALIAS: Record<string, string> = { '管家': 'orchestrator', orchestrator: 'orchestrator', '调研': 'researcher', '调研专家': 'researcher', researcher: 'researcher', '工程师': 'coder', coder: 'coder' };
-/** @mentions in order of appearance (deduped). Unknown @words returned separately. */
-export function parseMentions(text: string) {
+const DEFAULT_BUTLER_NAME = '管家 Orchestrator';
+const BASE_ALIAS: Record<string, string> = { '管家': 'orchestrator', orchestrator: 'orchestrator', '调研': 'researcher', '调研专家': 'researcher', researcher: 'researcher', '工程师': 'coder', coder: 'coder' };
+/** @mentions in order of appearance (deduped). Unknown @words returned separately. Optional extraAlias maps a custom butler name → orchestrator for this request. */
+export function parseMentions(text: string, extraAlias?: Record<string, string>) {
+  const alias = { ...BASE_ALIAS, ...(extraAlias || {}) };
   const ids: string[] = [], unknown: string[] = [];
   for (const mt of text.matchAll(/[@＠]([\p{L}\p{N}_-]+)/gu)) {
-    const w = mt[1]; const key = Object.keys(ALIAS).sort((a, b) => b.length - a.length).find(k => w.toLowerCase().startsWith(k.toLowerCase()));
-    if (key) { if (!ids.includes(ALIAS[key])) ids.push(ALIAS[key]); } else unknown.push(w);
+    const w = mt[1]; const key = Object.keys(alias).sort((a, b) => b.length - a.length).find(k => w.toLowerCase().startsWith(k.toLowerCase()));
+    if (key) { if (!ids.includes(alias[key])) ids.push(alias[key]); } else unknown.push(w);
   }
   return { ids, unknown };
 }
-const nameOf = (id: string) => CATALOG.find(a => a.id === id)?.name ?? id;
+const catalogName = (id: string) => CATALOG.find(a => a.id === id)?.name ?? id;
+const butlerDisplay = (raw: unknown) => {
+  const s = typeof raw === 'string' ? raw.trim() : '';
+  return s || DEFAULT_BUTLER_NAME;
+};
 const now = () => Date.now();
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } });
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -53,8 +60,8 @@ export function appMiddleware({ env, agent, agents }: Deps) {
     id: crypto.randomUUID(), role, threadId: thread, resourceId: thread, createdAt: new Date(),
     content: { format: 2, parts: [{ type: 'text', text }], content: text },
   });
-  /** Room turn: persist the user turn once, then each target agent reads the thread (readOnly) and its reply is saved as `[agent:id] …`. */
-  const roomTurn = async (wrapped: string, thread: string, targets: string[], errNote?: string) => {
+  /** Room turn: persist the user turn once, then each target agent reads the thread (readOnly) and its reply is saved as `[agent:id] …`. nameOf prefers session user's butler display_name for orchestrator. */
+  const roomTurn = async (wrapped: string, thread: string, targets: string[], nameOf: (id: string) => string, errNote?: string) => {
     const mem = await agent().getMemory?.();
     await mem.saveMessages({ messages: [dbMsg('user', wrapped, thread)] });
     const replies: { agentId: string; name: string; reply: string }[] = [];
@@ -100,11 +107,43 @@ export function appMiddleware({ env, agent, agents }: Deps) {
     }
     if (!session?.user) return json({ error: 'unauthorized' }, 401);
     const user = session.user;
-    const body: any = m === 'POST' ? await req.clone().json().catch(() => ({})) : {};
+    const body: any = (m === 'POST' || m === 'PATCH' || m === 'PUT') ? await req.clone().json().catch(() => ({})) : {};
+
+    const loadButler = async () => {
+      const row: any = await db().prepare('SELECT dm_thread_id, display_name FROM butler_profile WHERE user_id=?').bind(user.id).first();
+      const display_name = row?.display_name ?? null;
+      const name = butlerDisplay(display_name);
+      return { dm_thread_id: row?.dm_thread_id ?? `user:${user.id}`, display_name, name };
+    };
+    const nameOf = (butlerName: string) => (id: string) => id === 'orchestrator' ? butlerName : catalogName(id);
+    const mentionAlias = (butlerName: string) => {
+      const extra: Record<string, string> = {};
+      if (butlerName && butlerName !== DEFAULT_BUTLER_NAME) {
+        extra[butlerName] = 'orchestrator';
+        // also allow first token if multi-word (e.g. "小蜜" already single; "我的管家" → full string)
+        const first = butlerName.split(/\s+/)[0];
+        if (first && first !== butlerName) extra[first] = 'orchestrator';
+      }
+      return extra;
+    };
 
     if (p === '/api/me' && m === 'GET') {
-      const bp = await db().prepare('SELECT dm_thread_id FROM butler_profile WHERE user_id=?').bind(user.id).first();
-      return json({ user: { id: user.id, email: user.email, name: user.name }, butler: bp });
+      const butler = await loadButler();
+      return json({ user: { id: user.id, email: user.email, name: user.name }, butler });
+    }
+
+    if (p === '/api/butler/profile' && (m === 'PATCH' || m === 'PUT')) {
+      const raw = String(body.display_name ?? '').trim();
+      if (!raw || raw.length < 1 || raw.length > 32) return json({ error: 'display_name must be 1–32 chars after trim' }, 400);
+      await db().prepare('UPDATE butler_profile SET display_name=? WHERE user_id=?').bind(raw, user.id).run();
+      // ensure row exists (e.g. legacy users missing profile)
+      const check: any = await db().prepare('SELECT user_id FROM butler_profile WHERE user_id=?').bind(user.id).first();
+      if (!check) {
+        await db().prepare('INSERT INTO butler_profile (user_id, dm_thread_id, created_at, display_name) VALUES (?,?,?,?)')
+          .bind(user.id, `user:${user.id}`, now(), raw).run();
+      }
+      const butler = await loadButler();
+      return json({ butler });
     }
 
     if (p === '/api/rooms' && m === 'GET') {
@@ -204,17 +243,19 @@ export function appMiddleware({ env, agent, agents }: Deps) {
       const wrapped = `<turn room="${roomId}" from_user="${user.id}" from_name="${esc(String(user.name || user.email))}">${esc(text)}</turn>`;
       const { results: ra } = await db().prepare('SELECT agent_id FROM room_agents WHERE room_id=?').bind(roomId).all();
       const inRoom = new Set((ra as any[]).map(r => r.agent_id));
-      const { ids, unknown } = parseMentions(text);
+      const butler = await loadButler();
+      const no = nameOf(butler.name);
+      const { ids, unknown } = parseMentions(text, mentionAlias(butler.name));
       const missing = ids.filter(i => !inRoom.has(i));
       let targets = ids.filter(i => inRoom.has(i));
       let errNote: string | undefined;
       if (missing.length || (unknown.length && !ids.length)) {
-        const what = [...missing.map(nameOf), ...unknown.map(u => '@' + u)].join('、');
+        const what = [...missing.map(no), ...unknown.map(u => '@' + u)].join('、');
         errNote = `${what} 不在本群的 agent 列表里，请群主先添加。`;
       }
       if (!targets.length && !errNote) targets = ['orchestrator'];
       try {
-        const replies = await roomTurn(wrapped, thread, targets, errNote);
+        const replies = await roomTurn(wrapped, thread, targets, no, errNote);
         return json({ thread, replies, reply: replies.map(r => r.reply).join('\n\n') });
       } catch (e: any) { return json({ thread, error: 'agent failed', detail: String(e?.message ?? e).slice(0, 200) }, 502); }
     }
@@ -230,8 +271,11 @@ export function appMiddleware({ env, agent, agents }: Deps) {
       const text = String(body.text ?? '').trim().slice(0, 8000);
       if (!text) return json({ error: 'text required' }, 400);
       const thread = `user:${user.id}`;
-      try { return json({ thread, reply: await generate(text, thread, thread) }); }
-      catch (e: any) { return json({ thread, error: 'agent failed', detail: String(e?.message ?? e).slice(0, 200) }, 502); }
+      const butler = await loadButler();
+      try {
+        const reply = await generate(text, thread, thread);
+        return json({ thread, agentId: 'orchestrator', name: butler.name, reply });
+      } catch (e: any) { return json({ thread, error: 'agent failed', detail: String(e?.message ?? e).slice(0, 200) }, 502); }
     }
 
     return json({ error: 'not found' }, 404);

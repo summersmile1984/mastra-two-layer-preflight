@@ -1,7 +1,7 @@
 # Auth & Rooms (Better Auth on Cloudflare Workers + D1)
 
 - Better Auth 1.7 (`src/auth.ts`, `createAuth(env)`, `database: env.DB`), email+password and emailOTP. **No organization / team plugin.**
-- Group chats are self-built: `rooms`, `room_members`, `room_agents`, `room_invites` (nullable `tenant_id` reserved). Schema: `migrations/0001_auth_rooms.sql`.
+- Group chats are self-built: `rooms`, `room_members`, `room_agents`, `room_invites` (nullable `tenant_id` reserved). Schema: `migrations/0001_auth_rooms.sql`, `migrations/0002_butler_display_name.sql` (optional `butler_profile.display_name`).
 - Mastra threads are the message store: room → thread/resource `room_{roomId}` (created eagerly via `Memory.createThread` on room create; generate would create lazily otherwise); butler DM → `user:{userId}` (created lazily on first DM). `butler_profile` row is created in the Better Auth `user.create.after` hook. Experts are agents, not Better Auth users.
 - Routes are mounted as a Mastra server middleware (`src/l1/app-routes.ts`) because custom `apiRoutes` can't use `/api`. L2 routes (`/l2-claim`, `/a2a-callback`, `/l2-results`, `/health-l1`) unchanged.
 - `POST /api/agents/:id/generate|stream*` now requires a session. **DEV bypass for L2 tests only:** `Authorization: Bearer $PUSH_TOKEN`.
@@ -24,7 +24,8 @@ npx wrangler deploy -c .mastra/output/wrangler.json
 | Route | Notes |
 |---|---|
 | `/api/auth/*` | Better Auth (sign-up/email, sign-in/email, email-otp/send-verification-otp, sign-in/email-otp, sign-out, get-session) |
-| `GET /api/me` | user + butler DM thread |
+| `GET /api/me` | user + butler `{ dm_thread_id, display_name, name }` (`name` = display_name \|\| `管家 Orchestrator`) |
+| `PATCH /api/butler/profile {display_name}` | 1–32 chars trimmed; updates session user's butler_profile |
 | `POST /api/rooms {name}` / `GET /api/rooms` | create (owner + default `orchestrator` agent + thread) / list mine + pending invites |
 | `GET /api/rooms/:id` | members only; room + my role, members (joined with `user` name/email), agents, pendingInvites (owner/admin only) |
 | `POST /api/rooms/:id/invites {email}` | owner/admin only |

@@ -1,4 +1,4 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="Cache-Control" content="no-cache"><meta name="viewport" content="width=device-width,initial-scale=1"><title>管家 · 群聊</title>
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="Cache-Control" content="no-cache"><meta name="viewport" content="width=device-width,initial-scale=1"><title>管家 · 群聊</title><!-- v=butler-name-1 -->
 <style>
 :root{--bg:#0f1115;--panel:#161a21;--panel2:#1d222b;--line:#2a303b;--fg:#e6e9ef;--mut:#8b93a3;--acc:#5b8cff;--acc2:#3d6be0;--me:#2b4a8f;--bot:#232a35;--ok:#3fb67a;--warn:#e0a03d;--err:#e06363}
 *{box-sizing:border-box}html,body{height:100%}body{margin:0;font:14px/1.55 -apple-system,"PingFang SC","Noto Sans SC",system-ui,sans-serif;background:var(--bg);color:var(--fg)}
@@ -36,6 +36,12 @@ input,textarea{font:inherit;color:var(--fg);background:var(--panel2);border:1px 
 .invform{padding:6px 8px;display:flex;flex-direction:column;gap:6px}#invMsg{font-size:12px}
 @media (max-width:1000px){#appShell{grid-template-columns:220px 1fr}.panel{position:fixed;right:0;top:0;bottom:0;width:280px;z-index:5;box-shadow:-8px 0 24px #0008;display:none}.panel.open{display:block}#togglePanel{display:inline-block}}
 @media (max-width:640px){#appShell,#appShell.dm{grid-template-columns:1fr}.sidebar{display:none}}
+
+.dm-row{display:flex;align-items:center;gap:4px;padding:0 6px}
+.dm-row .item{flex:1;margin:0}
+.gear{padding:4px 8px!important;font-size:14px;line-height:1}
+#butlerModal{position:fixed;inset:0;background:#0008;z-index:20;display:flex;align-items:center;justify-content:center;padding:16px}
+#butlerModal .card{width:360px}
 </style></head><body>
 
 <div id="authScreen" class="hide"><div class="card">
@@ -54,7 +60,7 @@ input,textarea{font:inherit;color:var(--fg);background:var(--panel2);border:1px 
   <aside class="sidebar">
     <div class="me"><div class="av" id="meAv">?</div><div class="info"><div id="meName"></div><small class="mut" id="meEmail"></small></div><button class="ghost" style="padding:4px 8px" onclick="signOut()">退出</button></div>
     <div class="sec">管家私聊</div>
-    <div style="padding:0 6px"><div class="item" id="dmItem" onclick="openDM()"><div class="av bot" style="width:26px;height:26px;font-size:13px">🤖</div><span class="n">管家 Orchestrator</span></div></div>
+    <div class="dm-row"><div class="item" id="dmItem" onclick="openDM()"><div class="av bot" style="width:26px;height:26px;font-size:13px">🤖</div><span class="n" id="dmLabel">管家 Orchestrator</span></div><button class="ghost gear" title="重命名管家" onclick="event.stopPropagation();openButlerSettings()">⚙</button></div>
     <div id="invBox"></div>
     <div class="sec">群聊 <span id="roomCount"></span></div>
     <div class="newroom"><input id="rn" placeholder="新建群名称" onkeydown="if(event.key==='Enter')mkRoom()"><button onclick="mkRoom()">新建群</button></div>
@@ -80,7 +86,10 @@ const api=async(p,b,m)=>{const r=await fetch(p,{method:m||(b?'POST':'GET'),crede
 const unturn=s=>{const m=String(s).match(/^<turn[^>]*from_name="([^"]*)"[^>]*>([\s\S]*)<\/turn>$/);const d=x=>x.replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&');const fu=String(s).match(/from_user="([^"]*)"/);return m?{who:d(m[1]),uid:fu&&fu[1],text:d(m[2])}:{who:null,uid:null,text:s}};
 const msgText=c=>{if(typeof c==='string'){try{c=JSON.parse(c)}catch{return c}}if(typeof c==='string')return c;if(c&&Array.isArray(c.parts)){const t=c.parts.filter(p=>p&&p.type==='text').map(p=>p.text||'').join('');if(t)return t}if(c&&typeof c.content==='string')return c.content;return typeof c==='string'?c:JSON.stringify(c)};
 const ini=s=>(String(s||'?').trim()[0]||'?').toUpperCase();
-let ME=null,ROOMS=[],INV=[],CUR=null,BUSY=false,MODE='signin';
+let ME=null,BUTLER=null,BUTLER_NAME='管家 Orchestrator',ROOMS=[],INV=[],CUR=null,BUSY=false,MODE='signin';
+const DEFAULT_BUTLER='管家 Orchestrator';
+let ANAME={orchestrator:BUTLER_NAME,researcher:'调研专家',coder:'工程师'};
+function applyButlerName(n){BUTLER_NAME=(n&&String(n).trim())||DEFAULT_BUTLER;ANAME.orchestrator=BUTLER_NAME;const lab=$('#dmLabel');if(lab)lab.textContent=BUTLER_NAME;document.title=BUTLER_NAME+' · 群聊';if(CAT){const hit=CAT.find(a=>a.id==='orchestrator');if(hit)hit.name=BUTLER_NAME}if(CUR&&CUR.type==='dm'){setHead('🤖 '+BUTLER_NAME+' 私聊','',['orchestrator']);$('#txt').placeholder='私聊'+BUTLER_NAME+'… Enter 发送'}}
 
 /* ---------- auth ---------- */
 function authTab(t){MODE=t;['signin','signup','otp'].forEach(x=>$('#t'+x[0].toUpperCase()+x.slice(1)).classList.toggle('on',x===t));
@@ -99,12 +108,18 @@ async function signOut(){await api('/api/auth/sign-out',{});ME=null;showAuth()}
 function showAuth(){$('#appShell').classList.add('hide');$('#authScreen').classList.remove('hide')}
 
 /* ---------- shell ---------- */
-async function boot(){const r=await fetch('/api/me',{credentials:'include'});if(!r.ok)return showAuth();ME=(await r.json()).user;
+async function boot(){const r=await fetch('/api/me',{credentials:'include'});if(!r.ok)return showAuth();const meJ=await r.json();ME=meJ.user;BUTLER=meJ.butler||{};applyButlerName(BUTLER.name||BUTLER.display_name||DEFAULT_BUTLER);
  $('#authScreen').classList.add('hide');$('#appShell').classList.remove('hide');
  $('#meAv').textContent=ini(ME.name||ME.email);$('#meName').textContent=ME.name||ME.email;$('#meEmail').textContent=ME.email;
  if(!CAT){const c=await api('/api/agents');CAT=c.ok?(c.j.agents||[]):[]}
+ applyButlerName(BUTLER_NAME);
  await loadRooms();const want=location.hash.slice(1);
  if(want&&want!=='dm'&&ROOMS.find(x=>x.id===want))openRoom(want);else if(!want&&ROOMS[0])openRoom(ROOMS[0].id);else openDM()}
+function openButlerSettings(){$('#butlerNameIn').value=BUTLER_NAME===DEFAULT_BUTLER?'':BUTLER_NAME;$('#butlerErr').textContent='';$('#butlerModal').classList.remove('hide');$('#butlerNameIn').focus()}
+function closeButlerSettings(){$('#butlerModal').classList.add('hide')}
+async function saveButlerName(){const v=$('#butlerNameIn').value.trim();if(!v||v.length>32){$('#butlerErr').textContent='请输入 1–32 个字符';return}
+ const r=await api('/api/butler/profile',{display_name:v},'PATCH');if(!r.ok){$('#butlerErr').textContent=r.j.error||('失败 '+r.status);return}
+ BUTLER=r.j.butler||{};applyButlerName(BUTLER.name||v);closeButlerSettings();if(CUR&&CUR.type==='dm')loadMsgs()}
 async function loadRooms(){const {ok,j}=await api('/api/rooms');if(!ok)return;ROOMS=j.rooms||[];INV=j.invites||[];renderSide()}
 function renderSide(){$('#roomCount').textContent=ROOMS.length||'';
  $('#roomList').innerHTML=ROOMS.map(r=>`<div class="item ${CUR&&CUR.type==='room'&&CUR.id===r.id?'on':''}" onclick="openRoom('${r.id}')"><span>💬</span><span class="n">${h(r.name)}</span><span class="badge ${r.role==='owner'?'owner':''}">${roleLabel(r.role)}</span></div>`).join('')||'<div class="mut" style="padding:8px 10px;font-size:13px">还没有群，新建一个吧</div>';
@@ -117,11 +132,11 @@ async function accept(id){const r=await api(`/api/rooms/invites/${id}/accept`,{}
 function setHead(title,role,agents){$('#hTitle').textContent=title;$('#hRole').textContent=role||'';$('#hRole').className='badge'+(role==='群主'?' owner':'')+(role?'':' hide');
  $('#hAgents').innerHTML=(agents||[]).map(a=>`<span class="chip">🤖 ${h(aName(a))}</span>`).join(' ')}
 async function openDM(){CUR={type:'dm'};location.hash='dm';$('#appShell').classList.add('dm');$('#panel').classList.add('hide');renderSide();
- setHead('🤖 管家私聊','',['orchestrator']);$('#txt').placeholder='私聊管家… Enter 发送';await loadMsgs()}
+ setHead('🤖 '+BUTLER_NAME+' 私聊','',['orchestrator']);$('#txt').placeholder='私聊'+BUTLER_NAME+'… Enter 发送';await loadMsgs()}
 async function openRoom(id){CUR={type:'room',id};location.hash=id;$('#appShell').classList.remove('dm');$('#panel').classList.remove('hide');renderSide();
- const r=ROOMS.find(x=>x.id===id);setHead('💬 '+(r?r.name:'群聊'),r&&roleLabel(r.role),['orchestrator']);$('#txt').placeholder='在群里发言，@管家 @调研 @工程师 点名回复（默认管家）… Enter 发送';
+ const r=ROOMS.find(x=>x.id===id);setHead('💬 '+(r?r.name:'群聊'),r&&roleLabel(r.role),['orchestrator']);$('#txt').placeholder='在群里发言，@'+BUTLER_NAME+' @调研 @工程师 点名回复（默认管家）… Enter 发送';
  loadDetail(id);await loadMsgs()}
-const ANAME={orchestrator:'管家 Orchestrator',researcher:'调研专家',coder:'工程师'};let CAT=null;
+ANAME.orchestrator=BUTLER_NAME;let CAT=null;
 const aName=id=>{const hit=(CAT||[]).find(a=>a.id===id);return (hit&&hit.name)||ANAME[id]||id;};
 function unagent(t){const s=String(t??'');const m=s.match(/^\s*\[agent:([\w-]+)\]\s*/)||s.match(/\[agent:([\w-]+)\]\s*/);if(!m)return{id:'orchestrator',text:s};const id=m[1];const text=s.replace(m[0],'').replace(/^\s*\[agent:[\w-]+\]\s*/,'').trim();return{id,text}}
 async function addAgent(){const v=$('#agSel').value;if(!v||!CUR)return;const r=await api(`/api/rooms/${CUR.id}/agents`,{agentId:v});if(r.ok)loadDetail(CUR.id)}
@@ -140,7 +155,7 @@ async function invite(){const e=$('#invEm').value.trim();if(!e||!CUR||CUR.type!=
 
 /* ---------- messages ---------- */
 function renderChat(msgs){const list=msgs.filter(m=>m.role==='user'||m.role==='assistant');
- if(!list.length)return `<div class="empty">${CUR.type==='dm'?'👋 和管家打个招呼吧<br><small>私聊内容只有你和管家可见</small>':'💬 群里还没有消息<br><small>发一条消息，管家会在群里回复；邀请朋友一起聊</small>'}</div>`;
+ if(!list.length)return `<div class="empty">${CUR.type==='dm'?('👋 和'+h(BUTLER_NAME)+'打个招呼吧<br><small>私聊内容只有你和'+h(BUTLER_NAME)+'可见</small>'):'💬 群里还没有消息<br><small>发一条消息，管家会在群里回复；邀请朋友一起聊</small>'}</div>`;
  return list.map(m=>{const t=msgText(m.content);if(m.role==='assistant'){const g=unagent(t);return bubble('🤖 '+aName(g.id),g.text,false,true)}
   const u=unturn(t);const mine=CUR.type==='dm'||u.uid===ME.id||(!u.uid&&u.who===(ME.name||ME.email));return bubble('👤 '+(u.who||ME.name||'我'),u.text,mine,false)}).join('')}
 const bubble=(who,text,mine,bot)=>`<div class="msg ${mine?'mine':''}"><div class="av ${bot?'bot':''}">${bot?'🤖':h(ini(who.replace('👤 ','')))}</div><div><div class="who">${h(who)}</div><div class="bub">${h(text)}</div></div></div>`;
