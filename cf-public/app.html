@@ -79,6 +79,16 @@ input,textarea{font:inherit;color:var(--fg);background:var(--panel2);border:1px 
   </aside>
 </div>
 
+<div id="butlerModal" class="hide" onclick="if(event.target===this)closeButlerSettings()">
+  <div class="card" role="dialog" aria-labelledby="butlerModalTitle">
+    <h1 id="butlerModalTitle" style="font-size:18px;margin:0 0 8px">重命名管家</h1>
+    <div class="mut" style="margin-bottom:12px;font-size:13px">这个名字会出现在侧栏和聊天气泡上（1–32 个字符）</div>
+    <div class="field"><label>显示名</label><input id="butlerNameIn" maxlength="32" placeholder="例如：小蜜" onkeydown="if(event.key==='Enter')saveButlerName();if(event.key==='Escape')closeButlerSettings()"></div>
+    <div id="butlerErr" style="color:var(--bad,#f66);font-size:13px;min-height:18px;margin:6px 0"></div>
+    <div class="row2"><button class="ghost" onclick="closeButlerSettings()">取消</button><button onclick="saveButlerName()">保存</button></div>
+  </div>
+</div>
+
 <script>
 const $=s=>document.querySelector(s),log=t=>{const l=$('#log');l.textContent=new Date().toLocaleTimeString()+' '+t+'\n'+l.textContent};
 const h=s=>String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
