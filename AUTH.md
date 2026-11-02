@@ -26,10 +26,11 @@ npx wrangler deploy -c .mastra/output/wrangler.json
 | `/api/auth/*` | Better Auth (sign-up/email, sign-in/email, email-otp/send-verification-otp, sign-in/email-otp, sign-out, get-session) |
 | `GET /api/me` | user + butler DM thread |
 | `POST /api/rooms {name}` / `GET /api/rooms` | create (owner + default `orchestrator` agent + thread) / list mine + pending invites |
+| `GET /api/rooms/:id` | members only; room + my role, members (joined with `user` name/email), agents, pendingInvites (owner/admin only) |
 | `POST /api/rooms/:id/invites {email}` | owner/admin only |
 | `POST /api/rooms/invites/:id/accept` | invitee email must match session |
 | `POST /api/rooms/:id/messages {text}` / `GET` | members only; text wrapped as `<turn room from_user from_name>` |
-| `POST /api/butler/messages {text}` | private DM |
+| `POST /api/butler/messages {text}` / `GET` | private DM; GET recalls `user:{userId}` history |
 
 Browser: https://mastra-l1.summersmile1984.workers.dev/app.html
 

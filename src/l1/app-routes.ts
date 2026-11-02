@@ -104,6 +104,20 @@ export function appMiddleware({ env, agent }: Deps) {
       return json({ ok: true, room_id: inv.room_id });
     }
 
+    mm = p.match(/^\/api\/rooms\/([\w-]+)$/);
+    if (mm && m === 'GET' && mm[1] !== 'invites') {
+      const roomId = mm[1];
+      const role = await roleIn(roomId);
+      if (!role) return json({ error: 'not a member' }, 403);
+      const room: any = await db().prepare('SELECT id, name, thread_id, owner_id, created_at FROM rooms WHERE id=?').bind(roomId).first();
+      if (!room) return json({ error: 'not found' }, 404);
+      const { results: members } = await db().prepare('SELECT rm.user_id, u.name, u.email, rm.role, rm.joined_at FROM room_members rm LEFT JOIN "user" u ON u.id=rm.user_id WHERE rm.room_id=? ORDER BY rm.joined_at').bind(roomId).all();
+      const { results: agents } = await db().prepare('SELECT agent_id, added_at FROM room_agents WHERE room_id=? ORDER BY added_at').bind(roomId).all();
+      let pendingInvites: any[] = [];
+      if (role === 'owner' || role === 'admin') pendingInvites = (await db().prepare("SELECT id, email, status, created_at FROM room_invites WHERE room_id=? AND status='pending' ORDER BY created_at DESC").bind(roomId).all()).results;
+      return json({ room: { ...room, role }, role, members, agents, pendingInvites });
+    }
+
     mm = p.match(/^\/api\/rooms\/([\w-]+)\/invites$/);
     if (mm && m === 'POST') {
       const role = await roleIn(mm[1]);
@@ -131,6 +145,13 @@ export function appMiddleware({ env, agent }: Deps) {
       const wrapped = `<turn room="${roomId}" from_user="${user.id}" from_name="${esc(String(user.name || user.email))}">${esc(text)}</turn>`;
       try { return json({ thread, reply: await generate(wrapped, thread, thread) }); }
       catch (e: any) { return json({ thread, error: 'agent failed', detail: String(e?.message ?? e).slice(0, 200) }, 502); }
+    }
+
+    if (p === '/api/butler/messages' && m === 'GET') {
+      const thread = `user:${user.id}`;
+      const mem = await agent().getMemory?.();
+      const r = mem ? await mem.recall({ threadId: thread, resourceId: thread }).catch(() => ({ messages: [] })) : { messages: [] };
+      return json({ thread, messages: (r.messages ?? []).map((x: any) => ({ role: x.role, content: x.content })) });
     }
 
     if (p === '/api/butler/messages' && m === 'POST') {
