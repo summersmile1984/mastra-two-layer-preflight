@@ -18,6 +18,15 @@
       "database_id": "26a19832-8ff9-4fe4-a253-9305ae02f6bb"
     }
   ],
+  "ai": {
+    "binding": "AI"
+  },
+  "vectorize": [
+    {
+      "binding": "VECTORIZE",
+      "index_name": "mastra-l1-memory"
+    }
+  ],
   "main": "./.mastra/output/index.mjs",
   "vars": {
     "NODE_ENV": "production",

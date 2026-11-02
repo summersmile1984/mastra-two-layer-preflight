@@ -1,47 +1,88 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="Cache-Control" content="no-cache"><meta name="viewport" content="width=device-width,initial-scale=1"><title>管家 · 群聊</title><!-- v=butler-name-1 -->
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="Cache-Control" content="no-cache"><meta name="viewport" content="width=device-width,initial-scale=1"><title>管家 · 群聊</title>
+<!-- SPA choice (MVP): extend this cf-public/app.html (+ Worker static assets) instead of spinning Vite+React+shadcn now — that would block delivery. Vite SPA remains the later preference. -->
+<!-- v=ui-light-1 -->
 <style>
-:root{--bg:#0f1115;--panel:#161a21;--panel2:#1d222b;--line:#2a303b;--fg:#e6e9ef;--mut:#8b93a3;--acc:#5b8cff;--acc2:#3d6be0;--me:#2b4a8f;--bot:#232a35;--ok:#3fb67a;--warn:#e0a03d;--err:#e06363}
-*{box-sizing:border-box}html,body{height:100%}body{margin:0;font:14px/1.55 -apple-system,"PingFang SC","Noto Sans SC",system-ui,sans-serif;background:var(--bg);color:var(--fg)}
-button{font:inherit;cursor:pointer;border:0;border-radius:8px;padding:8px 12px;background:var(--acc);color:#fff}button:hover{background:var(--acc2)}button:disabled{opacity:.5;cursor:default}
-button.ghost{background:transparent;color:var(--mut);border:1px solid var(--line)}button.ghost:hover{color:var(--fg);border-color:var(--mut)}
-input,textarea{font:inherit;color:var(--fg);background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:9px 11px;outline:none;width:100%}input:focus,textarea:focus{border-color:var(--acc)}
+:root{
+  --bg:#f4f5f7;--panel:#ffffff;--panel2:#f9fafb;--line:#e5e7eb;
+  --fg:#111827;--mut:#6b7280;--acc:#2563eb;--acc2:#1d4ed8;
+  --me:#dbeafe;--bot:#f3f4f6;--ok:#16a34a;--warn:#d97706;--err:#dc2626;
+  --shadow:0 1px 2px rgba(0,0,0,.04);--shadow-md:0 4px 16px rgba(0,0,0,.06);
+  --wash:#eff6ff;--av-butler:#ede9fe;--av-butler-fg:#6d28d9;
+  --av-user:#dbeafe;--av-user-fg:#1d4ed8;--av-expert:#ccfbf1;--av-expert-fg:#0f766e;
+}
+*{box-sizing:border-box}html,body{height:100%}
+body{margin:0;font:14px/1.55 -apple-system,"PingFang SC","Noto Sans SC",system-ui,sans-serif;background:var(--bg);color:var(--fg);-webkit-font-smoothing:antialiased}
+button{font:inherit;cursor:pointer;border:0;border-radius:8px;padding:8px 12px;background:var(--acc);color:#fff;font-weight:500;transition:background .15s}
+button:hover{background:var(--acc2)}button:disabled{opacity:.5;cursor:default}
+button.ghost{background:transparent;color:var(--mut);border:1px solid var(--line)}button.ghost:hover{color:var(--fg);background:var(--panel2);border-color:#d1d5db}
+button.danger{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca}button.ok{background:var(--ok)}
+input,textarea,select{font:inherit;color:var(--fg);background:#fff;border:1px solid var(--line);border-radius:8px;padding:9px 11px;outline:none;width:100%;box-shadow:var(--shadow)}
+input:focus,textarea:focus,select:focus{border-color:var(--acc);box-shadow:0 0 0 3px rgba(37,99,235,.15)}
 .hide{display:none!important}.mut{color:var(--mut)}small{font-size:12px}
-/* auth */
-#authScreen{min-height:100%;display:flex;align-items:center;justify-content:center;padding:20px}
-.card{width:380px;max-width:100%;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:26px}
-.card h1{margin:0 0 4px;font-size:20px}.tabs{display:flex;gap:6px;margin:18px 0 14px}.tabs button{flex:1;background:var(--panel2);color:var(--mut)}.tabs button.on{background:var(--acc);color:#fff}
-.field{margin:10px 0}.field label{display:block;font-size:12px;color:var(--mut);margin-bottom:4px}.row2{display:flex;gap:8px}.row2>*{flex:1}
-#authErr{color:var(--err);min-height:18px;font-size:13px;margin-top:8px}details{margin-top:14px;color:var(--mut)}#log{white-space:pre-wrap;font:11px/1.4 ui-monospace,monospace;max-height:160px;overflow:auto;background:#0b0d10;padding:8px;border-radius:6px}
-/* shell */
-#appShell{display:grid;grid-template-columns:260px 1fr 260px;height:100vh}#appShell.dm{grid-template-columns:260px 1fr}
+#authScreen{min-height:100%;align-items:center;justify-content:center;padding:20px;background:var(--bg)}#authScreen:not(.hide){display:flex}
+.card{width:380px;max-width:100%;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:28px;box-shadow:var(--shadow-md)}
+.card h1{margin:0 0 4px;font-size:20px;font-weight:600}.tabs{display:flex;gap:6px;margin:18px 0 14px}
+.tabs button{flex:1;background:var(--panel2);color:var(--mut);border:1px solid var(--line);box-shadow:none}.tabs button.on{background:var(--acc);color:#fff;border-color:var(--acc)}
+.field{margin:10px 0}.field label{display:block;font-size:12px;color:var(--mut);margin-bottom:4px;font-weight:500}.row2{display:flex;gap:8px}.row2>*{flex:1}
+#authErr{color:var(--err);min-height:18px;font-size:13px;margin-top:8px}details{margin-top:14px;color:var(--mut)}
+#log{white-space:pre-wrap;font:11px/1.4 ui-monospace,monospace;max-height:160px;overflow:auto;background:var(--panel2);border:1px solid var(--line);padding:8px;border-radius:8px;color:var(--mut)}
+#appShell{display:grid;grid-template-columns:260px 1fr 260px;height:100vh;background:var(--bg)}#appShell.dm{grid-template-columns:260px 1fr}
 .sidebar{background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
-.me{display:flex;align-items:center;gap:10px;padding:14px;border-bottom:1px solid var(--line)}.av{width:32px;height:32px;border-radius:50%;background:var(--acc);display:flex;align-items:center;justify-content:center;font-weight:600;flex:none}.av.bot{background:#6b4fd8}
-.me .info{flex:1;min-width:0}.me .info div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.sec{padding:12px 10px 4px;font-size:12px;color:var(--mut);display:flex;justify-content:space-between;align-items:center}
-.list{overflow:auto;flex:1;padding:0 6px 10px}.item{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;cursor:pointer;margin:2px 0}.item:hover{background:var(--panel2)}.item.on{background:#24314d}
-.item .n{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.badge{font-size:11px;padding:1px 7px;border-radius:10px;background:var(--panel2);color:var(--mut);border:1px solid var(--line)}.badge.owner{color:var(--warn);border-color:#5a4720}
-.newroom{display:flex;gap:6px;padding:6px 10px}.newroom input{padding:6px 9px}.newroom button{padding:6px 10px}
-.inv{margin:4px 10px;padding:8px 10px;border:1px dashed var(--warn);border-radius:8px;font-size:13px;display:flex;align-items:center;gap:8px}.inv span{flex:1}.inv button{padding:4px 10px;background:var(--ok)}
-.main{display:flex;flex-direction:column;min-width:0;min-height:0}
-.head{padding:12px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--panel)}.head h2{margin:0;font-size:16px}.chip{font-size:12px;padding:2px 8px;border-radius:12px;background:#2a2347;color:#c9bbff}
+.me{display:flex;align-items:center;gap:10px;padding:14px;border-bottom:1px solid var(--line)}
+.av{width:32px;height:32px;border-radius:10px;background:var(--av-user);color:var(--av-user-fg);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:13px;flex:none;letter-spacing:-.02em}
+.av.bot,.av.butler{background:var(--av-butler);color:var(--av-butler-fg)}
+.av.me{background:var(--av-user);color:var(--av-user-fg)}
+.av.user{background:#e0e7ff;color:#4338ca}
+.av.expert{background:var(--av-expert);color:var(--av-expert-fg)}
+.me .info{flex:1;min-width:0}.me .info div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600}
+.sec{padding:14px 14px 6px;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--mut);display:flex;justify-content:space-between;align-items:center}
+.list{overflow:auto;flex:1;padding:0 8px 10px}
+.item{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:10px;cursor:pointer;margin:2px 0;transition:background .12s}
+.item:hover{background:var(--panel2)}.item.on{background:var(--wash);color:var(--acc)}
+.item .n{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+.badge{font-size:11px;padding:1px 7px;border-radius:999px;background:var(--panel2);color:var(--mut);border:1px solid var(--line)}.badge.owner{color:#b45309;border-color:#fde68a;background:#fffbeb}
+.newroom{display:flex;gap:6px;padding:6px 10px}.newroom input{padding:6px 9px;box-shadow:none}.newroom button{padding:6px 10px}
+.inv{margin:4px 10px;padding:8px 10px;border:1px dashed #fbbf24;background:#fffbeb;border-radius:10px;font-size:13px;display:flex;align-items:center;gap:8px}.inv span{flex:1}.inv button{padding:4px 10px;background:var(--ok)}
+.main{display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--bg)}
+.head{padding:12px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--panel)}
+.head h2{margin:0;font-size:16px;font-weight:600}
+.chip{font-size:12px;padding:2px 8px;border-radius:8px;background:var(--av-butler);color:var(--av-butler-fg);font-weight:500}
 #togglePanel{margin-left:auto;padding:4px 10px;display:none}
 #msgs{flex:1;overflow:auto;padding:18px}.empty{margin:auto;text-align:center;color:var(--mut);padding:60px 20px}
-.msg{display:flex;gap:10px;margin:12px 0;max-width:80%}.msg.mine{margin-left:auto;flex-direction:row-reverse}
-.bub{background:var(--bot);border:1px solid var(--line);padding:9px 12px;border-radius:12px;white-space:pre-wrap;word-break:break-word}.msg.mine .bub{background:var(--me);border-color:#36589e}
-.who{font-size:12px;color:var(--mut);margin-bottom:3px}.msg.mine .who{text-align:right}
+.msg{display:flex;gap:10px;margin:14px 0;max-width:78%}.msg.mine{margin-left:auto;flex-direction:row-reverse}
+.bub{background:var(--bot);border:1px solid transparent;padding:10px 14px;border-radius:16px;white-space:pre-wrap;word-break:break-word;box-shadow:var(--shadow);color:var(--fg)}
+.msg.mine .bub{background:var(--me);border-color:transparent;color:#1e3a8a}
+.who{font-size:12px;color:var(--mut);margin-bottom:4px;font-weight:500}.msg.mine .who{text-align:right}
 .typing span{display:inline-block;width:6px;height:6px;margin:0 2px;border-radius:50%;background:var(--mut);animation:b 1s infinite}.typing span:nth-child(2){animation-delay:.2s}.typing span:nth-child(3){animation-delay:.4s}@keyframes b{50%{opacity:.2}}
-.composer{display:flex;gap:8px;padding:12px 18px;border-top:1px solid var(--line);background:var(--panel)}.composer textarea{resize:none;height:44px}
+.composer{display:flex;gap:8px;padding:12px 18px;border-top:1px solid var(--line);background:var(--panel)}.composer textarea{resize:none;height:44px;box-shadow:none}
 .panel{background:var(--panel);border-left:1px solid var(--line);overflow:auto;padding:4px 6px}
-.pm{display:flex;align-items:center;gap:8px;padding:7px 8px}.pm .av{width:28px;height:28px;font-size:12px}.pm .t{flex:1;min-width:0}.pm .t div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pm{display:flex;align-items:center;gap:8px;padding:7px 8px}.pm .av{width:28px;height:28px;font-size:12px;border-radius:9px}.pm .t{flex:1;min-width:0}.pm .t div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .invform{padding:6px 8px;display:flex;flex-direction:column;gap:6px}#invMsg{font-size:12px}
-@media (max-width:1000px){#appShell{grid-template-columns:220px 1fr}.panel{position:fixed;right:0;top:0;bottom:0;width:280px;z-index:5;box-shadow:-8px 0 24px #0008;display:none}.panel.open{display:block}#togglePanel{display:inline-block}}
-@media (max-width:640px){#appShell,#appShell.dm{grid-template-columns:1fr}.sidebar{display:none}}
-
-.dm-row{display:flex;align-items:center;gap:4px;padding:0 6px}
-.dm-row .item{flex:1;margin:0}
-.gear{padding:4px 8px!important;font-size:14px;line-height:1}
-#butlerModal{position:fixed;inset:0;background:#0008;z-index:20;display:flex;align-items:center;justify-content:center;padding:16px}
-#butlerModal .card{width:360px}
+.side-foot{margin-top:auto;border-top:1px solid var(--line);padding:10px;display:flex;flex-direction:column;gap:6px}
+.side-foot button{width:100%;text-align:left;background:transparent;color:var(--fg);border:1px solid var(--line);display:flex;align-items:center;gap:8px;font-weight:500}
+.side-foot button:hover{background:var(--panel2);border-color:#d1d5db}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;background:#9ca3af}.dot.on{background:var(--ok)}.dot.off{background:var(--err)}
+.modal{position:fixed;inset:0;background:rgba(17,24,39,.35);z-index:20;display:flex;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(2px)}
+.modal .sheet{background:var(--panel);border:1px solid var(--line);border-radius:16px;width:720px;max-width:100%;max-height:90vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:var(--shadow-md)}
+.modal .sheet.sm{width:420px}
+.modal .hd{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)}
+.modal .hd h1{margin:0;font-size:16px;flex:1;font-weight:600}
+.modal .bd{display:flex;min-height:0;flex:1;overflow:hidden}
+.set-nav{width:160px;border-right:1px solid var(--line);padding:10px;background:var(--panel2);overflow:auto}
+.set-nav button{display:block;width:100%;text-align:left;margin:2px 0;background:transparent;color:var(--mut);padding:8px 10px;border:0;box-shadow:none;font-weight:500}
+.set-nav button.on{background:var(--wash);color:var(--acc)}
+.set-nav button:disabled{opacity:.35;cursor:not-allowed}
+.set-pane{flex:1;overflow:auto;padding:16px 18px}
+.set-pane h2{margin:0 0 12px;font-size:18px;font-weight:600}
+.set-pane .block{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:10px 0;box-shadow:var(--shadow)}
+.set-pane .block h3{margin:0 0 8px;font-size:12px;color:var(--mut);font-weight:600;letter-spacing:.02em}
+.app-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}
+.app-row:last-child{border-bottom:0}
+.app-row .ico{width:36px;height:36px;border-radius:10px;background:var(--av-butler);color:var(--av-butler-fg);display:flex;align-items:center;justify-content:center;flex:none}
+.app-row .meta{flex:1;min-width:0}
+.app-row .meta b{display:block;font-weight:600}
+@media (max-width:1000px){#appShell{grid-template-columns:220px 1fr}.panel{position:fixed;right:0;top:0;bottom:0;width:280px;z-index:5;box-shadow:-8px 0 24px rgba(0,0,0,.08);display:none}.panel.open{display:block}#togglePanel{display:inline-block}}
+@media (max-width:640px){#appShell,#appShell.dm{grid-template-columns:1fr}.sidebar{display:none}.modal .bd{flex-direction:column}.set-nav{width:100%;display:flex;gap:4px;border-right:0;border-bottom:1px solid var(--line)}.set-nav button{width:auto}}
 </style></head><body>
 
 <div id="authScreen" class="hide"><div class="card">
@@ -58,13 +99,19 @@ input,textarea{font:inherit;color:var(--fg);background:var(--panel2);border:1px 
 
 <div id="appShell" class="hide">
   <aside class="sidebar">
-    <div class="me"><div class="av" id="meAv">?</div><div class="info"><div id="meName"></div><small class="mut" id="meEmail"></small></div><button class="ghost" style="padding:4px 8px" onclick="signOut()">退出</button></div>
+    <div class="me"><div class="av me" id="meAv">?</div><div class="info"><div id="meName"></div><small class="mut" id="meEmail"></small></div><button class="ghost" style="padding:4px 8px" onclick="signOut()">退出</button></div>
     <div class="sec">管家私聊</div>
-    <div class="dm-row"><div class="item" id="dmItem" onclick="openDM()"><div class="av bot" style="width:26px;height:26px;font-size:13px">🤖</div><span class="n" id="dmLabel">管家 Orchestrator</span></div><button class="ghost gear" title="重命名管家" onclick="event.stopPropagation();openButlerSettings()">⚙</button></div>
+    <div class="list" style="flex:none;padding-bottom:0">
+      <div class="item" id="dmItem" onclick="openDM()"><div class="av bot" style="width:26px;height:26px;font-size:12px" id="dmAv">管</div><span class="n" id="dmLabel">管家 Orchestrator</span></div>
+    </div>
     <div id="invBox"></div>
     <div class="sec">群聊 <span id="roomCount"></span></div>
     <div class="newroom"><input id="rn" placeholder="新建群名称" onkeydown="if(event.key==='Enter')mkRoom()"><button onclick="mkRoom()">新建群</button></div>
     <div class="list" id="roomList"></div>
+    <div class="side-foot">
+      <button type="button" onclick="openConnections()">🔌 连接应用</button>
+      <button type="button" onclick="openSettings('general')">⚙ 设置</button>
+    </div>
   </aside>
   <main class="main">
     <div class="head"><h2 id="hTitle">—</h2><span id="hRole" class="badge"></span><span id="hAgents"></span><button class="ghost" id="togglePanel" onclick="$('#panel').classList.toggle('open')">成员</button></div>
@@ -79,27 +126,43 @@ input,textarea{font:inherit;color:var(--fg);background:var(--panel2);border:1px 
   </aside>
 </div>
 
-<div id="butlerModal" class="hide" onclick="if(event.target===this)closeButlerSettings()">
-  <div class="card" role="dialog" aria-labelledby="butlerModalTitle">
-    <h1 id="butlerModalTitle" style="font-size:18px;margin:0 0 8px">重命名管家</h1>
-    <div class="mut" style="margin-bottom:12px;font-size:13px">这个名字会出现在侧栏和聊天气泡上（1–32 个字符）</div>
-    <div class="field"><label>显示名</label><input id="butlerNameIn" maxlength="32" placeholder="例如：小蜜" onkeydown="if(event.key==='Enter')saveButlerName();if(event.key==='Escape')closeButlerSettings()"></div>
-    <div id="butlerErr" style="color:var(--bad,#f66);font-size:13px;min-height:18px;margin:6px 0"></div>
-    <div class="row2"><button class="ghost" onclick="closeButlerSettings()">取消</button><button onclick="saveButlerName()">保存</button></div>
+<!-- 连接应用 -->
+<div id="connModal" class="modal hide" onclick="if(event.target===this)closeConnections()">
+  <div class="sheet sm" role="dialog" aria-labelledby="connTitle">
+    <div class="hd"><h1 id="connTitle">连接应用</h1><button class="ghost" onclick="closeConnections()">关闭</button></div>
+    <div class="set-pane" id="connBody" style="max-height:70vh"><div class="mut">加载中…</div></div>
+  </div>
+</div>
+
+<!-- 设置：通用 / 电脑 + 占位 -->
+<div id="setModal" class="modal hide" onclick="if(event.target===this)closeSettings()">
+  <div class="sheet" role="dialog" aria-labelledby="setTitle">
+    <div class="hd"><h1 id="setTitle">设置</h1><button class="ghost" onclick="closeSettings()">关闭</button></div>
+    <div class="bd">
+      <nav class="set-nav" id="setNav">
+        <button type="button" data-tab="general" class="on" onclick="setTab('general')">通用</button>
+        <button type="button" data-tab="computer" onclick="setTab('computer')">电脑</button>
+        <button type="button" disabled title="后期">权限</button>
+        <button type="button" disabled title="后期">保险库</button>
+        <button type="button" disabled title="后期">用量与账单</button>
+        <button type="button" disabled title="后期">更新</button>
+      </nav>
+      <div class="set-pane" id="setPane"></div>
+    </div>
   </div>
 </div>
 
 <script>
-const $=s=>document.querySelector(s),log=t=>{const l=$('#log');l.textContent=new Date().toLocaleTimeString()+' '+t+'\n'+l.textContent};
+const $=s=>document.querySelector(s),log=t=>{const l=$('#log');if(l)l.textContent=new Date().toLocaleTimeString()+' '+t+'\n'+l.textContent};
 const h=s=>String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 const api=async(p,b,m)=>{const r=await fetch(p,{method:m||(b?'POST':'GET'),credentials:'include',headers:b?{'content-type':'application/json'}:{},body:b?JSON.stringify(b):undefined});const j=await r.json().catch(()=>({}));if(!r.ok){log(r.status+' '+p+' '+JSON.stringify(j));if(r.status===401&&!p.startsWith('/api/auth/'))showAuth()}return {ok:r.ok,status:r.status,j}};
 const unturn=s=>{const m=String(s).match(/^<turn[^>]*from_name="([^"]*)"[^>]*>([\s\S]*)<\/turn>$/);const d=x=>x.replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&');const fu=String(s).match(/from_user="([^"]*)"/);return m?{who:d(m[1]),uid:fu&&fu[1],text:d(m[2])}:{who:null,uid:null,text:s}};
 const msgText=c=>{if(typeof c==='string'){try{c=JSON.parse(c)}catch{return c}}if(typeof c==='string')return c;if(c&&Array.isArray(c.parts)){const t=c.parts.filter(p=>p&&p.type==='text').map(p=>p.text||'').join('');if(t)return t}if(c&&typeof c.content==='string')return c.content;return typeof c==='string'?c:JSON.stringify(c)};
 const ini=s=>(String(s||'?').trim()[0]||'?').toUpperCase();
-let ME=null,BUTLER=null,BUTLER_NAME='管家 Orchestrator',ROOMS=[],INV=[],CUR=null,BUSY=false,MODE='signin';
+let ME=null,BUTLER=null,BUTLER_NAME='管家 Orchestrator',ROOMS=[],INV=[],CUR=null,BUSY=false,MODE='signin',SET_TAB='general';
 const DEFAULT_BUTLER='管家 Orchestrator';
 let ANAME={orchestrator:BUTLER_NAME,researcher:'调研专家',coder:'工程师'};
-function applyButlerName(n){BUTLER_NAME=(n&&String(n).trim())||DEFAULT_BUTLER;ANAME.orchestrator=BUTLER_NAME;const lab=$('#dmLabel');if(lab)lab.textContent=BUTLER_NAME;document.title=BUTLER_NAME+' · 群聊';if(CAT){const hit=CAT.find(a=>a.id==='orchestrator');if(hit)hit.name=BUTLER_NAME}if(CUR&&CUR.type==='dm'){setHead('🤖 '+BUTLER_NAME+' 私聊','',['orchestrator']);$('#txt').placeholder='私聊'+BUTLER_NAME+'… Enter 发送'}}
+function applyButlerName(n){BUTLER_NAME=(n&&String(n).trim())||DEFAULT_BUTLER;ANAME.orchestrator=BUTLER_NAME;const lab=$('#dmLabel');if(lab)lab.textContent=BUTLER_NAME;const dav=$('#dmAv');if(dav)dav.textContent=ini(BUTLER_NAME);document.title=BUTLER_NAME+' · 群聊';if(CAT){const hit=CAT.find(a=>a.id==='orchestrator');if(hit)hit.name=BUTLER_NAME}if(CUR&&CUR.type==='dm'){setHead('🤖 '+BUTLER_NAME+' 私聊','',['orchestrator']);$('#txt').placeholder='私聊'+BUTLER_NAME+'… Enter 发送'}}
 
 /* ---------- auth ---------- */
 function authTab(t){MODE=t;['signin','signup','otp'].forEach(x=>$('#t'+x[0].toUpperCase()+x.slice(1)).classList.toggle('on',x===t));
@@ -125,11 +188,6 @@ async function boot(){const r=await fetch('/api/me',{credentials:'include'});if(
  applyButlerName(BUTLER_NAME);
  await loadRooms();const want=location.hash.slice(1);
  if(want&&want!=='dm'&&ROOMS.find(x=>x.id===want))openRoom(want);else if(!want&&ROOMS[0])openRoom(ROOMS[0].id);else openDM()}
-function openButlerSettings(){$('#butlerNameIn').value=BUTLER_NAME===DEFAULT_BUTLER?'':BUTLER_NAME;$('#butlerErr').textContent='';$('#butlerModal').classList.remove('hide');$('#butlerNameIn').focus()}
-function closeButlerSettings(){$('#butlerModal').classList.add('hide')}
-async function saveButlerName(){const v=$('#butlerNameIn').value.trim();if(!v||v.length>32){$('#butlerErr').textContent='请输入 1–32 个字符';return}
- const r=await api('/api/butler/profile',{display_name:v},'PATCH');if(!r.ok){$('#butlerErr').textContent=r.j.error||('失败 '+r.status);return}
- BUTLER=r.j.butler||{};applyButlerName(BUTLER.name||v);closeButlerSettings();if(CUR&&CUR.type==='dm')loadMsgs()}
 async function loadRooms(){const {ok,j}=await api('/api/rooms');if(!ok)return;ROOMS=j.rooms||[];INV=j.invites||[];renderSide()}
 function renderSide(){$('#roomCount').textContent=ROOMS.length||'';
  $('#roomList').innerHTML=ROOMS.map(r=>`<div class="item ${CUR&&CUR.type==='room'&&CUR.id===r.id?'on':''}" onclick="openRoom('${r.id}')"><span>💬</span><span class="n">${h(r.name)}</span><span class="badge ${r.role==='owner'?'owner':''}">${roleLabel(r.role)}</span></div>`).join('')||'<div class="mut" style="padding:8px 10px;font-size:13px">还没有群，新建一个吧</div>';
@@ -153,8 +211,8 @@ async function addAgent(){const v=$('#agSel').value;if(!v||!CUR)return;const r=a
 async function loadDetail(id){const {ok,j}=await api(`/api/rooms/${id}`);if(!ok||!CUR||CUR.id!==id)return;
  setHead('💬 '+j.room.name,roleLabel(j.role),(j.agents||[]).map(a=>a.agent_id));
  $('#memCount').textContent=j.members.length;
- $('#memList').innerHTML=j.members.map(m=>`<div class="pm"><div class="av">${h(ini(m.name||m.email))}</div><div class="t"><div>👤 ${h(m.name||m.email||m.user_id)}${m.user_id===ME.id?' <small class="mut">(我)</small>':''}</div><small class="mut">${h(m.email||'')}</small></div><span class="badge ${m.role==='owner'?'owner':''}">${roleLabel(m.role)}</span></div>`).join('');
- $('#agentList').innerHTML=(j.agents||[]).map(a=>`<div class="pm"><div class="av bot">🤖</div><div class="t"><div>${h(aName(a.agent_id))}</div><small class="mut">${h(a.agent_id)}</small></div></div>`).join('')||'<div class="mut pm">无</div>';
+ $('#memList').innerHTML=j.members.map(m=>`<div class="pm"><div class="av ${m.user_id===ME.id?'me':'user'}">${h(ini(m.name||m.email))}</div><div class="t"><div>👤 ${h(m.name||m.email||m.user_id)}${m.user_id===ME.id?' <small class="mut">(我)</small>':''}</div><small class="mut">${h(m.email||'')}</small></div><span class="badge ${m.role==='owner'?'owner':''}">${roleLabel(m.role)}</span></div>`).join('');
+ $('#agentList').innerHTML=(j.agents||[]).map(a=>`<div class="pm"><div class="av ${a.agent_id==='orchestrator'?'bot':'expert'}">${h(ini(aName(a.agent_id)))}</div><div class="t"><div>${h(aName(a.agent_id))}</div><small class="mut">${h(a.agent_id)}</small></div></div>`).join('')||'<div class="mut pm">无</div>';
  const admin=j.role==='owner'||j.role==='admin';if(!CAT){const c=await api('/api/agents');CAT=c.ok?c.j.agents:[]}
  const have=new Set((j.agents||[]).map(a=>a.agent_id)),left=CAT.filter(a=>!have.has(a.id));
  if(admin&&left.length)$('#agentList').insertAdjacentHTML('beforeend',`<div class="pm"><select id="agSel">${left.map(a=>`<option value="${a.id}">${h(a.name)}</option>`).join('')}</select><button onclick="addAgent()">添加</button></div>`);
@@ -166,17 +224,98 @@ async function invite(){const e=$('#invEm').value.trim();if(!e||!CUR||CUR.type!=
 /* ---------- messages ---------- */
 function renderChat(msgs){const list=msgs.filter(m=>m.role==='user'||m.role==='assistant');
  if(!list.length)return `<div class="empty">${CUR.type==='dm'?('👋 和'+h(BUTLER_NAME)+'打个招呼吧<br><small>私聊内容只有你和'+h(BUTLER_NAME)+'可见</small>'):'💬 群里还没有消息<br><small>发一条消息，管家会在群里回复；邀请朋友一起聊</small>'}</div>`;
- return list.map(m=>{const t=msgText(m.content);if(m.role==='assistant'){const g=unagent(t);return bubble('🤖 '+aName(g.id),g.text,false,true)}
+ return list.map(m=>{const t=msgText(m.content);if(m.role==='assistant'){const g=unagent(t);return bubble('🤖 '+aName(g.id),g.text,false,true,g.id)}
   const u=unturn(t);const mine=CUR.type==='dm'||u.uid===ME.id||(!u.uid&&u.who===(ME.name||ME.email));return bubble('👤 '+(u.who||ME.name||'我'),u.text,mine,false)}).join('')}
-const bubble=(who,text,mine,bot)=>`<div class="msg ${mine?'mine':''}"><div class="av ${bot?'bot':''}">${bot?'🤖':h(ini(who.replace('👤 ','')))}</div><div><div class="who">${h(who)}</div><div class="bub">${h(text)}</div></div></div>`;
+const avRole=(bot,aid,mine)=>bot?(aid&&aid!=='orchestrator'?'expert':'bot'):(mine?'me':'user');
+const avLabel=(who,bot,aid)=>bot?h(ini(aName(aid||'orchestrator'))):h(ini(who.replace(/^🤖 |^👤 /,'')));
+const bubble=(who,text,mine,bot,aid)=>`<div class="msg ${mine?'mine':''}"><div class="av ${avRole(bot,aid,mine)}">${avLabel(who,bot,aid)}</div><div><div class="who">${h(who)}</div><div class="bub">${h(text)}</div></div></div>`;
 const histUrl=()=>CUR.type==='dm'?'/api/butler/messages':`/api/rooms/${CUR.id}/messages`;
 async function loadMsgs(){const key=JSON.stringify(CUR);$('#msgs').innerHTML='<div class="empty">加载中…</div>';const {ok,j}=await api(histUrl());if(key!==JSON.stringify(CUR))return;
  $('#msgs').innerHTML=ok?renderChat(j.messages||[]):'<div class="empty">加载失败</div>';$('#msgs').scrollTop=1e9}
 async function send(){const t=$('#txt').value.trim();if(!t||BUSY||!CUR)return;BUSY=true;$('#sendBtn').disabled=true;$('#txt').value='';
- const box=$('#msgs');box.querySelector('.empty')?.remove();box.insertAdjacentHTML('beforeend',bubble('👤 '+(ME.name||'我'),t,true,false)+'<div class="msg" id="typ"><div class="av bot">🤖</div><div><div class="who">🤖 agent 思考中</div><div class="bub typing"><span></span><span></span><span></span></div></div></div>');box.scrollTop=1e9;
+ const box=$('#msgs');box.querySelector('.empty')?.remove();box.insertAdjacentHTML('beforeend',bubble('👤 '+(ME.name||'我'),t,true,false)+'<div class="msg" id="typ"><div class="av bot">…</div><div><div class="who">agent 思考中</div><div class="bub typing"><span></span><span></span><span></span></div></div></div>');box.scrollTop=1e9;
  const key=JSON.stringify(CUR);const r=await api(histUrl(),{text:t});BUSY=false;$('#sendBtn').disabled=false;
  if(key!==JSON.stringify(CUR))return;if(!r.ok){$('#typ')?.remove();box.insertAdjacentHTML('beforeend',`<div class="empty" style="padding:8px;color:var(--err)">发送失败：${h(r.j.detail||r.j.error||r.status)}</div>`);return}
- await loadMsgs();$('#txt').focus()}
+ await loadMsgs();
+ // L2 experts: POST returns fast with dispatched[]; poll messages until expert bubbles appear (~30s)
+ const disp=(r.j&&r.j.dispatched)||[];
+ if(disp.length&&CUR&&CUR.type==='room'){
+   const want=new Set(disp.map(d=>d.expertId));
+   let n=0; const poll=async()=>{
+     if(key!==JSON.stringify(CUR)||n++>15)return;
+     const m=await api(histUrl()); if(!m.ok){setTimeout(poll,2000);return}
+     const texts=(m.j.messages||[]).filter(x=>x.role==='assistant').map(x=>msgText(x.content));
+     const got=[...want].filter(id=>texts.some(t=>String(t).includes('[agent:'+id+']')));
+     await loadMsgs();
+     if(got.length>=want.size)return;
+     setTimeout(poll,2000);
+   };
+   setTimeout(poll,2000);
+ }
+ $('#txt').focus()}
 $('#txt').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send()}};
+
+/* ---------- 连接应用 ---------- */
+function openConnections(){$('#connModal').classList.remove('hide');loadConnections()}
+function closeConnections(){$('#connModal').classList.add('hide')}
+async function loadConnections(){
+  const box=$('#connBody');box.innerHTML='<div class="mut">加载中…</div>';
+  const {ok,j}=await api('/api/connections');
+  if(!ok){box.innerHTML=`<div style="color:var(--err)">加载失败：${h(j.error||'')}</div>`;return}
+  const connected=new Set((j.connected||[]).map(c=>c.server_id));
+  box.innerHTML=`<div class="mut" style="margin-bottom:10px;font-size:13px">选择要接入管家的应用。凭据与真实 MCPClient.listToolsets 注入仍为 TODO（Workers）。</div>`+
+    (j.catalog||[]).map(a=>{
+      const on=connected.has(a.id);
+      return `<div class="app-row"><div class="ico">🔌</div><div class="meta"><b>${h(a.name)}</b><small class="mut">${h(a.desc||a.category||'')}</small></div>`+
+        (on?`<button class="ghost" onclick="disconnectApp('${a.id}')">断开</button>`:`<button onclick="connectApp('${a.id}')">连接</button>`)+`</div>`;
+    }).join('')||'<div class="mut">暂无目录</div>';
+}
+async function connectApp(id){const r=await api('/api/connections',{server_id:id});if(r.ok)loadConnections();else alert(r.j.error||'连接失败')}
+async function disconnectApp(id){const r=await api('/api/connections/'+id,null,'DELETE');if(r.ok)loadConnections();else alert(r.j.error||'断开失败')}
+
+/* ---------- 设置 ---------- */
+function openSettings(tab){SET_TAB=tab||'general';$('#setModal').classList.remove('hide');setTab(SET_TAB)}
+function closeSettings(){$('#setModal').classList.add('hide')}
+function setTab(tab){SET_TAB=tab;document.querySelectorAll('#setNav button[data-tab]').forEach(b=>b.classList.toggle('on',b.dataset.tab===tab));renderSettings()}
+async function renderSettings(){
+  const pane=$('#setPane');
+  if(SET_TAB==='general'){
+    pane.innerHTML=`<h2>通用</h2>
+      <div class="block"><h3>账户</h3>
+        <div><b>${h(ME&&ME.name||'')}</b></div>
+        <div class="mut">${h(ME&&ME.email||'')}</div>
+      </div>
+      <div class="block"><h3>管家显示名</h3>
+        <div class="mut" style="margin-bottom:8px;font-size:13px">出现在侧栏与聊天气泡（1–32 字符）。重命名已移入设置，侧栏齿轮已移除。</div>
+        <div class="field"><input id="butlerNameIn" maxlength="32" placeholder="例如：小蜜" value="${h(BUTLER_NAME===DEFAULT_BUTLER?'':BUTLER_NAME)}"></div>
+        <div id="butlerErr" style="color:var(--err);font-size:13px;min-height:18px"></div>
+        <button onclick="saveButlerName()">保存显示名</button>
+      </div>`;
+    return;
+  }
+  if(SET_TAB==='computer'){
+    pane.innerHTML=`<h2>电脑</h2><div class="mut">加载设备状态…</div>`;
+    const {ok,j}=await api('/api/device');
+    const l2=ok&&j.l2?j.l2:{online:false,label:'未知',note:''};
+    const devices=(ok&&j.devices)||[];
+    pane.innerHTML=`<h2>电脑</h2>
+      <div class="block"><h3>Bot 电脑 / 本地执行</h3>
+        <p style="margin:0 0 8px">${h(l2.note||'慢任务由本机 L2（claim + ACP）认领执行，对用户不可见。')}</p>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
+          <span class="dot ${l2.online?'on':'off'}"></span>
+          <b>${h(l2.label|| (l2.online?'在线':'离线'))}</b>
+          <span class="badge">${h(l2.status||'')}</span>
+        </div>
+        ${l2.queued!=null?`<div class="mut" style="margin-top:8px">排队任务：${h(String(l2.queued))}</div>`:''}
+      </div>
+      <div class="block"><h3>设备</h3>
+        ${devices.map(d=>`<div class="app-row"><div class="ico">💻</div><div class="meta"><b>${h(d.name)}</b><small class="mut">${h(d.detail||d.kind||'')}</small></div><span class="dot ${d.online?'on':'off'}"></span></div>`).join('')||'<div class="mut">无设备信息</div>'}
+      </div>`;
+  }
+}
+async function saveButlerName(){const v=$('#butlerNameIn').value.trim();if(!v||v.length>32){$('#butlerErr').textContent='请输入 1–32 个字符';return}
+ const r=await api('/api/butler/profile',{display_name:v},'PATCH');if(!r.ok){$('#butlerErr').textContent=r.j.error||('失败 '+r.status);return}
+ BUTLER=r.j.butler||{};applyButlerName(BUTLER.name||v);$('#butlerErr').innerHTML='<span style="color:var(--ok)">已保存</span>';if(CUR&&CUR.type==='dm')loadMsgs()}
+
 authTab('signin');boot();
 </script></body></html>

@@ -1,4 +1,7 @@
-# Auth & Rooms (Better Auth on Cloudflare Workers + D1)
+# Auth
+
+> UI：`apps/web` SPA（`/app`）。本文件描述 API 契约，与前端无关。
+ & Rooms (Better Auth on Cloudflare Workers + D1)
 
 - Better Auth 1.7 (`src/auth.ts`, `createAuth(env)`, `database: env.DB`), email+password and emailOTP. **No organization / team plugin.**
 - Group chats are self-built: `rooms`, `room_members`, `room_agents`, `room_invites` (nullable `tenant_id` reserved). Schema: `migrations/0001_auth_rooms.sql`, `migrations/0002_butler_display_name.sql` (optional `butler_profile.display_name`).
@@ -33,7 +36,7 @@ npx wrangler deploy -c .mastra/output/wrangler.json
 | `POST /api/rooms/:id/messages {text}` / `GET` | members only; text wrapped as `<turn room from_user from_name>` |
 | `POST /api/butler/messages {text}` / `GET` | private DM; GET recalls `user:{userId}` history |
 
-Browser: https://mastra-l1.summersmile1984.workers.dev/app.html
+Browser: https://mastra-l1.summersmile1984.workers.dev/app  (SPA; legacy vanilla archived as cf-public/app.vanilla.html)
 
 ## curl recipe
 ```

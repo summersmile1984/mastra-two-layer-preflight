@@ -1,6 +1,6 @@
 {
   "name": "mastra-two-layer-preflight",
-  "version": "0.1.0",
+  "version": "0.2.4",
   "private": false,
   "type": "module",
   "scripts": {
@@ -13,7 +13,9 @@
     "start:l2-pull": "tsx --env-file-if-exists=.env src/l2-pull-worker.ts",
     "start:l2": "tsx --env-file-if-exists=.env src/l2-server.ts",
     "cf:deploy": "npm run cf:build && wrangler deploy -c .mastra/output/wrangler.json",
-    "cf:build": "NODE_OPTIONS=--import=$PWD/scripts/cf-workers-stub.mjs mastra build && node scripts/cf-postbuild.mjs"
+    "cf:build": "NODE_OPTIONS=--import=$PWD/scripts/cf-workers-stub.mjs mastra build && node scripts/cf-postbuild.mjs",
+    "web:dev": "npm run dev --prefix apps/web",
+    "web:build": "npm run build --prefix apps/web"
   },
   "dependencies": {
     "@ai-sdk/provider-v5": "npm:@ai-sdk/provider@2.0.3",

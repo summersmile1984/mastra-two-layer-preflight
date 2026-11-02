@@ -1,0 +1,37 @@
+{
+  "feature": "feat-acp-real-e2e",
+  "version": "0.2.1",
+  "at": "2026-11-02T22:25:44+0800",
+  "timezone_label": "Asia/Shanghai",
+  "live": "https://mastra-l1.summersmile1984.workers.dev",
+  "harness": "dsh --profile acp via runAcpPrompt (NOT stub, NOT ACP_DRY_RUN)",
+  "pull": "npm run start:l2-pull",
+  "taskId": "t-acp-real-1793629506",
+  "token": "ACP_REAL_1793629506",
+  "hostname": "grok-bot-vm-420833729",
+  "file": {
+    "path": "workspace-l2/local/ACP_REAL_1793629506.txt",
+    "exists": true,
+    "content": "ACP_REAL_1793629506"
+  },
+  "l2_tasks_row": {
+    "task_id": "t-acp-real-1793629506",
+    "state": "completed",
+    "result": "I'll create the file and verify in a single command.已在真实本机执行并验证完成。\n\n- 执行命令：`printf 'ACP_REAL_1793629506\\n' > workspace-l2/local/ACP_REAL_1793629506.txt && hostname && cat workspace-l2/local/ACP_REAL_1793629506.txt`\n- 文件绝对路径：`/workspace/mastra-two-layer-preflight/workspace-l2/local/ACP_REAL_1793629506.txt`\n- 文件内容（单行，已用 read 工具复核）：`ACP_REAL_1793629506`\n- hostname：`grok-bot-vm-420833729`\n\n结论字面量：ACP_REAL_1793629506；hostname：grok-bot-vm-420833729。",
+    "reply": "已完成：文件已在本机创建并通过校验，文件内容为 ACP_REAL_1793629506。",
+    "runtime": "local",
+    "thread_id": "user:h4aoqCmMxq3lISy7QyJdraYxHgJmVyZu",
+    "prompt": "请完成可验证的真实本机工作（不要只口头答应）：1) 用 shell 写入文件 workspace-l2/local/ACP_REAL_1793629506.txt，内容为一行：ACP_REAL_1793629506 2) 在同一命令中输出 hostname 和该文件内容。最终回复必须包含字面量 ACP_REAL_1793629506 以及 hostname。",
+    "created_at": 1793629506016,
+    "updated_at": 1793629529204
+  },
+  "proof": {
+    "claimed_and_completed": true,
+    "token_in_result": true,
+    "token_in_reply": true,
+    "token_in_file": true,
+    "not_dry_run": true,
+    "compose_reports_artifact_not_prompt_echo": true
+  },
+  "pull_log_tail": "\n> mastra-two-layer-preflight@0.2.1 start:l2-pull\n> tsx --env-file-if-exists=.env src/l2-pull-worker.ts\n\n[L2-pull] polling https://mastra-l1.summersmile1984.workers.dev/l2-claim every 2000 ms \n[L2-pull] claimed t-acp-real-1793629506 local\n[A2A] harness tool_call {\"title\":\"bash\"}\n[A2A] harness tool_call {\"title\":\"read\"}\n[L2-pull] done t-acp-real-1793629506 completed {\"ok\":true}\n"
+}

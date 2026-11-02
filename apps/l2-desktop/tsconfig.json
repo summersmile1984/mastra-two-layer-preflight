@@ -2,16 +2,18 @@
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",
-    "moduleResolution": "bundler",
+    "moduleResolution": "Bundler",
     "strict": true,
     "skipLibCheck": true,
-    "noEmit": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
     "types": ["node"],
-    "baseUrl": ".",
+    "noEmit": true,
+    "allowImportingTsExtensions": false,
     "paths": {
       "@mastra-preflight/shared": ["../../packages/shared/src/index.ts"]
-    },
-    "allowImportingTsExtensions": false
+    }
   },
-  "include": ["src/**/*.ts", "../../packages/shared/src/index.ts"]
+  "include": ["src/**/*.ts"],
+  "exclude": ["src-tauri", "dist", "node_modules"]
 }

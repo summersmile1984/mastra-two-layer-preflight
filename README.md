@@ -42,12 +42,12 @@ npm run smoke      # HTTP+SSE 跑一遍：派发、闲聊、补充、查进度�
 ```
 
 ## 4. 页面
-- 只显示 L1（总管）；顶部连接状态点（已连接/重连中）、状态行（后台处理中/正在整理结果）；会话 sid 存 sessionStorage，可 `?sid=` 指定。
-- L1 气泡可带截图；`secret_request` 时弹出密码表单（明文只发 `/api/secret`）。
-- 架构细节、A2A/ACP、降级、CF 接入见 **ARCHITECTURE.md**；`.env.example` 列出全部变量。
+- **现行 L1 前端**：`apps/web`（Vite + React + TypeScript + Tailwind + shadcn-style），软浅色产品风；CF 上打开 `/app`（`v=ui-spa-light-1`）。构建经 `scripts/cf-postbuild.mjs` 进 Workers Static Assets。
+- 只显示 L1（总管）；鉴权 / 管家私聊 / 群聊 / @提及 / 设置与连接弹层走同一套 `/api/*`。旧单文件见 `cf-public/app.vanilla.html`。
+- 早期 demo：`public/index.html` / `cf-public/index.html`（SSE 流式）。架构细节见 **ARCHITECTURE.md**。
 
 ## 目录
-`src/server.ts`（HTTP/SSE/A2A callback/HITL）· `src/l1/controller.ts` · `src/l2/a2a-l2.ts`（A2A server + ACP run + AllowlistedPushSender）· `src/l2/acp-worker.ts`（queue 模式 worker）· `src/l2/queue.ts` · `public/index.html` · `scripts/` · `legacy/`
+`src/server.ts`（HTTP/SSE/A2A callback/HITL）· `src/l1/controller.ts` · `src/l2/a2a-l2.ts`（A2A server + ACP run + AllowlistedPushSender）· `src/l2/acp-worker.ts`（queue 模式 worker）· `src/l2/queue.ts` · `apps/web/`（现行 SPA）· `cf-public/` · `public/index.html` · `scripts/cf-postbuild.mjs` · `legacy/`
 
 
 ## 运行模式（L1 / L2 拆分）
@@ -67,3 +67,41 @@ L2_A2A_URL=http://127.0.0.1:4121 npm run start:l1
 - **CF 目标路径**：L1 → Cloudflare Workers，L2 → 云电脑 + cloudflared tunnel；见 [DEPLOY-CF.md](DEPLOY-CF.md)（目前为最小 Worker 占位 `cf/worker.ts`）。
 
 拆分模式限制：截图收集读 L1 本地 `workspace-l2/`（仅同机有效）；HITL 密码明文留在 L1 内存，不随任务跨进程下发。
+
+## v0.2.2（2026-11-02）
+- **真机 CUA**：`src/l2/cua-cli.ts` + `apps/l2-desktop` 走 trycua `cua` CLI（`cua do switch/screenshot/shell/click/type/key`）；`npm run start:l2-pull` 按 `runtime/kind` 路由 CUA vs ACP。
+- L1 `dispatch_to_sandbox` runtime 枚举：`cloud | local | cua`；`/l2-claim` 返回 `kind: 'cua'|'acp'`。
+- 证明见 `/workspace/shots/feat-cua-real-e2e.json` + `feat-cua-real.png`。
+
+## v0.2.1（2026-11-02）
+- **默认权限**：`execute` / `mcp:github` 默认 **allow**（异步独立干活，不做「始终询问」）。
+- **真机 ACP**：`apps/l2-desktop` ACP runner 走真实 `runAcpPrompt`（`dsh --profile acp`）；`npm run start:l2-pull` 对 live L1 claim→callback。证明见 `/workspace/shots/feat-acp-real-e2e.json`。
+- **产品定时任务**（非 Mastra Workflows EE）：D1 `schedules` / `schedule_runs`（`migrations/0006_schedules.sql`）；`GET/POST /api/schedules`、`PATCH/DELETE /api/schedules/:id`、`POST .../run`、`GET .../runs`；Workers Cron `* * * * *` → `scheduled` → `POST /cron-tick`（Bearer `PUSH_TOKEN`）。SPA 设置 → **定时任务**。
+- 管家 compose：`<sandbox-result>` 强制汇报结果原文、`activeTools: []`，避免把回调结果再当新任务派发。
+
+## v0.2.0 功能（2026-11-02）
+- 权限 HITL：`GET/PUT /api/permissions`（D1 `user_permission_rules` / `user_settings.auto_review`）；deny 或 ask(自动审核关) 的工具从管家 `activeTools` 移除，房间派发受 execute 规则控制。
+- 保险库：`/api/vault`（AES-GCM，密钥 = SHA-256('vault:'+VAULT_KEY||BETTER_AUTH_SECRET)），只回显掩码；连接可引用 `vault_id` 作为 Bearer。
+- 用量：`usage_events`，`GET /api/usage`，SPA 导出 CSV。
+- 更新：`GET /api/version`，SPA 版本 + 渠道（localStorage `update.channel`）。
+- 连接应用：HTTP MCP（https）`tools/list` → 以 toolsets 注入管家；`?probe=1` 检测；stdio 只能在 L2。
+- Agent Builder：`/api/agent-defs` CRUD + `/:id/export`；`ad-*` 自建 agent 挂到群后由 `dispatch_to_expert` 入队，L2 runner 用 `dynamicExpert()` 从 `agent_defs` 现建 Agent 运行。
+- Bot 模板：`/api/templates`、`POST /api/templates/import`（3 个内置 + 文件导入）。
+- 迁移：`migrations/0005_features.sql`。截图：`scripts/feat-verify-shots.mjs`。
+
+## Memory (v0.2.4)
+
+- **DM**: thread `dm_<userId>`, resourceId `user:<userId>`. Legacy `user:<id>` threads are migrated automatically on first DM access (`migrateDm`, idempotent).
+- **Room**: thread `room_<roomId>`, resource = room thread; butler memory is read-only in rooms → no DM working-memory leak.
+- **Working memory**: resource-scoped (`mastra_resources`), written via custom zod tool `save_working_memory` (DM only; Mastra's built-in tool uses Ajv codegen which Workers forbids).
+- **Long DMs**: rolling summary in D1 table `memory_summaries` (every 20 msgs beyond the last 20). Observational Memory not supported by D1Store.
+- **Semantic recall**: Workers AI `@cf/baai/bge-m3` (1024d) + Vectorize `mastra-l1-memory`, filtered by `resource_id` (DM) / `thread_id` (room), score ≥ 0.55. Done explicitly in `app-routes.ts`.
+  Bindings (added by `scripts/cf-postbuild.mjs` to the generated wrangler.json): `AI`, `VECTORIZE` → `mastra-l1-memory`.
+  ```
+  npx wrangler vectorize create mastra-l1-memory --dimensions=1024 --metric=cosine
+  npx wrangler vectorize create-metadata-index mastra-l1-memory --property-name=thread_id --type=string
+  npx wrangler vectorize create-metadata-index mastra-l1-memory --property-name=resource_id --type=string
+  ```
+- **Room delete**: `memory.deleteThread(room_<id>)`, deletes `mastra_messages`, `l2_tasks`, summary, and vectors (`cleanup` in response).
+- **`GET/DELETE /api/memory`** (`?q=` probe; `?what=working|history|all`): settings view/clear stub.
+- **New member policy**: new room members see the full room history (default; no truncation).

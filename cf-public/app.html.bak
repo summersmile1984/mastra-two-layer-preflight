@@ -1,0 +1,182 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="Cache-Control" content="no-cache"><meta name="viewport" content="width=device-width,initial-scale=1"><title>管家 · 群聊</title><!-- v=butler-name-1 -->
+<style>
+:root{--bg:#0f1115;--panel:#161a21;--panel2:#1d222b;--line:#2a303b;--fg:#e6e9ef;--mut:#8b93a3;--acc:#5b8cff;--acc2:#3d6be0;--me:#2b4a8f;--bot:#232a35;--ok:#3fb67a;--warn:#e0a03d;--err:#e06363}
+*{box-sizing:border-box}html,body{height:100%}body{margin:0;font:14px/1.55 -apple-system,"PingFang SC","Noto Sans SC",system-ui,sans-serif;background:var(--bg);color:var(--fg)}
+button{font:inherit;cursor:pointer;border:0;border-radius:8px;padding:8px 12px;background:var(--acc);color:#fff}button:hover{background:var(--acc2)}button:disabled{opacity:.5;cursor:default}
+button.ghost{background:transparent;color:var(--mut);border:1px solid var(--line)}button.ghost:hover{color:var(--fg);border-color:var(--mut)}
+input,textarea{font:inherit;color:var(--fg);background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:9px 11px;outline:none;width:100%}input:focus,textarea:focus{border-color:var(--acc)}
+.hide{display:none!important}.mut{color:var(--mut)}small{font-size:12px}
+/* auth */
+#authScreen{min-height:100%;display:flex;align-items:center;justify-content:center;padding:20px}
+.card{width:380px;max-width:100%;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:26px}
+.card h1{margin:0 0 4px;font-size:20px}.tabs{display:flex;gap:6px;margin:18px 0 14px}.tabs button{flex:1;background:var(--panel2);color:var(--mut)}.tabs button.on{background:var(--acc);color:#fff}
+.field{margin:10px 0}.field label{display:block;font-size:12px;color:var(--mut);margin-bottom:4px}.row2{display:flex;gap:8px}.row2>*{flex:1}
+#authErr{color:var(--err);min-height:18px;font-size:13px;margin-top:8px}details{margin-top:14px;color:var(--mut)}#log{white-space:pre-wrap;font:11px/1.4 ui-monospace,monospace;max-height:160px;overflow:auto;background:#0b0d10;padding:8px;border-radius:6px}
+/* shell */
+#appShell{display:grid;grid-template-columns:260px 1fr 260px;height:100vh}#appShell.dm{grid-template-columns:260px 1fr}
+.sidebar{background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+.me{display:flex;align-items:center;gap:10px;padding:14px;border-bottom:1px solid var(--line)}.av{width:32px;height:32px;border-radius:50%;background:var(--acc);display:flex;align-items:center;justify-content:center;font-weight:600;flex:none}.av.bot{background:#6b4fd8}
+.me .info{flex:1;min-width:0}.me .info div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sec{padding:12px 10px 4px;font-size:12px;color:var(--mut);display:flex;justify-content:space-between;align-items:center}
+.list{overflow:auto;flex:1;padding:0 6px 10px}.item{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;cursor:pointer;margin:2px 0}.item:hover{background:var(--panel2)}.item.on{background:#24314d}
+.item .n{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.badge{font-size:11px;padding:1px 7px;border-radius:10px;background:var(--panel2);color:var(--mut);border:1px solid var(--line)}.badge.owner{color:var(--warn);border-color:#5a4720}
+.newroom{display:flex;gap:6px;padding:6px 10px}.newroom input{padding:6px 9px}.newroom button{padding:6px 10px}
+.inv{margin:4px 10px;padding:8px 10px;border:1px dashed var(--warn);border-radius:8px;font-size:13px;display:flex;align-items:center;gap:8px}.inv span{flex:1}.inv button{padding:4px 10px;background:var(--ok)}
+.main{display:flex;flex-direction:column;min-width:0;min-height:0}
+.head{padding:12px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--panel)}.head h2{margin:0;font-size:16px}.chip{font-size:12px;padding:2px 8px;border-radius:12px;background:#2a2347;color:#c9bbff}
+#togglePanel{margin-left:auto;padding:4px 10px;display:none}
+#msgs{flex:1;overflow:auto;padding:18px}.empty{margin:auto;text-align:center;color:var(--mut);padding:60px 20px}
+.msg{display:flex;gap:10px;margin:12px 0;max-width:80%}.msg.mine{margin-left:auto;flex-direction:row-reverse}
+.bub{background:var(--bot);border:1px solid var(--line);padding:9px 12px;border-radius:12px;white-space:pre-wrap;word-break:break-word}.msg.mine .bub{background:var(--me);border-color:#36589e}
+.who{font-size:12px;color:var(--mut);margin-bottom:3px}.msg.mine .who{text-align:right}
+.typing span{display:inline-block;width:6px;height:6px;margin:0 2px;border-radius:50%;background:var(--mut);animation:b 1s infinite}.typing span:nth-child(2){animation-delay:.2s}.typing span:nth-child(3){animation-delay:.4s}@keyframes b{50%{opacity:.2}}
+.composer{display:flex;gap:8px;padding:12px 18px;border-top:1px solid var(--line);background:var(--panel)}.composer textarea{resize:none;height:44px}
+.panel{background:var(--panel);border-left:1px solid var(--line);overflow:auto;padding:4px 6px}
+.pm{display:flex;align-items:center;gap:8px;padding:7px 8px}.pm .av{width:28px;height:28px;font-size:12px}.pm .t{flex:1;min-width:0}.pm .t div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.invform{padding:6px 8px;display:flex;flex-direction:column;gap:6px}#invMsg{font-size:12px}
+@media (max-width:1000px){#appShell{grid-template-columns:220px 1fr}.panel{position:fixed;right:0;top:0;bottom:0;width:280px;z-index:5;box-shadow:-8px 0 24px #0008;display:none}.panel.open{display:block}#togglePanel{display:inline-block}}
+@media (max-width:640px){#appShell,#appShell.dm{grid-template-columns:1fr}.sidebar{display:none}}
+
+.dm-row{display:flex;align-items:center;gap:4px;padding:0 6px}
+.dm-row .item{flex:1;margin:0}
+.gear{padding:4px 8px!important;font-size:14px;line-height:1}
+#butlerModal{position:fixed;inset:0;background:#0008;z-index:20;display:flex;align-items:center;justify-content:center;padding:16px}
+#butlerModal .card{width:360px}
+</style></head><body>
+
+<div id="authScreen" class="hide"><div class="card">
+  <h1>🤖 管家 · 群聊</h1><div class="mut">登录后与管家私聊，或邀请朋友进群一起聊</div>
+  <div class="tabs"><button id="tSignin" class="on" onclick="authTab('signin')">密码登录</button><button id="tSignup" onclick="authTab('signup')">注册</button><button id="tOtp" onclick="authTab('otp')">验证码</button></div>
+  <div class="field"><label>邮箱</label><input id="em" type="email" placeholder="you@example.com" autocomplete="email"></div>
+  <div class="field" id="fName"><label>昵称</label><input id="nm" placeholder="群里显示的名字"></div>
+  <div class="field" id="fPw"><label>密码</label><input id="pw" type="password" placeholder="至少 8 位"></div>
+  <div class="field row2" id="fOtp"><input id="otp" placeholder="6 位验证码"><button class="ghost" onclick="sendOtp()">发送验证码</button></div>
+  <button id="authBtn" style="width:100%;margin-top:8px" onclick="doAuth()">登录</button>
+  <div id="authErr"></div>
+  <details><summary>调试</summary><div id="log"></div></details>
+</div></div>
+
+<div id="appShell" class="hide">
+  <aside class="sidebar">
+    <div class="me"><div class="av" id="meAv">?</div><div class="info"><div id="meName"></div><small class="mut" id="meEmail"></small></div><button class="ghost" style="padding:4px 8px" onclick="signOut()">退出</button></div>
+    <div class="sec">管家私聊</div>
+    <div class="dm-row"><div class="item" id="dmItem" onclick="openDM()"><div class="av bot" style="width:26px;height:26px;font-size:13px">🤖</div><span class="n" id="dmLabel">管家 Orchestrator</span></div><button class="ghost gear" title="重命名管家" onclick="event.stopPropagation();openButlerSettings()">⚙</button></div>
+    <div id="invBox"></div>
+    <div class="sec">群聊 <span id="roomCount"></span></div>
+    <div class="newroom"><input id="rn" placeholder="新建群名称" onkeydown="if(event.key==='Enter')mkRoom()"><button onclick="mkRoom()">新建群</button></div>
+    <div class="list" id="roomList"></div>
+  </aside>
+  <main class="main">
+    <div class="head"><h2 id="hTitle">—</h2><span id="hRole" class="badge"></span><span id="hAgents"></span><button class="ghost" id="togglePanel" onclick="$('#panel').classList.toggle('open')">成员</button></div>
+    <div id="msgs"></div>
+    <div class="composer"><textarea id="txt" placeholder="输入消息，Enter 发送，Shift+Enter 换行"></textarea><button id="sendBtn" onclick="send()">发送</button></div>
+  </main>
+  <aside class="panel" id="panel">
+    <div class="sec">成员 <span id="memCount"></span></div><div id="memList"></div>
+    <div class="sec">Agent</div><div id="agentList"></div>
+    <div id="invSec"><div class="sec">邀请成员</div><div class="invform"><input id="invEm" type="email" placeholder="对方邮箱"><button onclick="invite()">发送邀请</button><span id="invMsg" class="mut"></span></div>
+      <div class="sec">待接受邀请</div><div id="pendList"></div></div>
+  </aside>
+</div>
+
+<div id="butlerModal" class="hide" onclick="if(event.target===this)closeButlerSettings()">
+  <div class="card" role="dialog" aria-labelledby="butlerModalTitle">
+    <h1 id="butlerModalTitle" style="font-size:18px;margin:0 0 8px">重命名管家</h1>
+    <div class="mut" style="margin-bottom:12px;font-size:13px">这个名字会出现在侧栏和聊天气泡上（1–32 个字符）</div>
+    <div class="field"><label>显示名</label><input id="butlerNameIn" maxlength="32" placeholder="例如：小蜜" onkeydown="if(event.key==='Enter')saveButlerName();if(event.key==='Escape')closeButlerSettings()"></div>
+    <div id="butlerErr" style="color:var(--bad,#f66);font-size:13px;min-height:18px;margin:6px 0"></div>
+    <div class="row2"><button class="ghost" onclick="closeButlerSettings()">取消</button><button onclick="saveButlerName()">保存</button></div>
+  </div>
+</div>
+
+<script>
+const $=s=>document.querySelector(s),log=t=>{const l=$('#log');l.textContent=new Date().toLocaleTimeString()+' '+t+'\n'+l.textContent};
+const h=s=>String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const api=async(p,b,m)=>{const r=await fetch(p,{method:m||(b?'POST':'GET'),credentials:'include',headers:b?{'content-type':'application/json'}:{},body:b?JSON.stringify(b):undefined});const j=await r.json().catch(()=>({}));if(!r.ok){log(r.status+' '+p+' '+JSON.stringify(j));if(r.status===401&&!p.startsWith('/api/auth/'))showAuth()}return {ok:r.ok,status:r.status,j}};
+const unturn=s=>{const m=String(s).match(/^<turn[^>]*from_name="([^"]*)"[^>]*>([\s\S]*)<\/turn>$/);const d=x=>x.replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&');const fu=String(s).match(/from_user="([^"]*)"/);return m?{who:d(m[1]),uid:fu&&fu[1],text:d(m[2])}:{who:null,uid:null,text:s}};
+const msgText=c=>{if(typeof c==='string'){try{c=JSON.parse(c)}catch{return c}}if(typeof c==='string')return c;if(c&&Array.isArray(c.parts)){const t=c.parts.filter(p=>p&&p.type==='text').map(p=>p.text||'').join('');if(t)return t}if(c&&typeof c.content==='string')return c.content;return typeof c==='string'?c:JSON.stringify(c)};
+const ini=s=>(String(s||'?').trim()[0]||'?').toUpperCase();
+let ME=null,BUTLER=null,BUTLER_NAME='管家 Orchestrator',ROOMS=[],INV=[],CUR=null,BUSY=false,MODE='signin';
+const DEFAULT_BUTLER='管家 Orchestrator';
+let ANAME={orchestrator:BUTLER_NAME,researcher:'调研专家',coder:'工程师'};
+function applyButlerName(n){BUTLER_NAME=(n&&String(n).trim())||DEFAULT_BUTLER;ANAME.orchestrator=BUTLER_NAME;const lab=$('#dmLabel');if(lab)lab.textContent=BUTLER_NAME;document.title=BUTLER_NAME+' · 群聊';if(CAT){const hit=CAT.find(a=>a.id==='orchestrator');if(hit)hit.name=BUTLER_NAME}if(CUR&&CUR.type==='dm'){setHead('🤖 '+BUTLER_NAME+' 私聊','',['orchestrator']);$('#txt').placeholder='私聊'+BUTLER_NAME+'… Enter 发送'}}
+
+/* ---------- auth ---------- */
+function authTab(t){MODE=t;['signin','signup','otp'].forEach(x=>$('#t'+x[0].toUpperCase()+x.slice(1)).classList.toggle('on',x===t));
+ $('#fName').classList.toggle('hide',t!=='signup');$('#fPw').classList.toggle('hide',t==='otp');$('#fOtp').classList.toggle('hide',t!=='otp');
+ $('#authBtn').textContent=t==='signup'?'注册并登录':'登录';$('#authErr').textContent=''}
+const em=()=>$('#em').value.trim();const aerr=(r,d)=>$('#authErr').textContent=r.j.message||r.j.error||d||('失败 '+r.status);
+async function doAuth(){const b=$('#authBtn');b.disabled=true;try{let r;
+ if(MODE==='signup')r=await api('/api/auth/sign-up/email',{email:em(),password:$('#pw').value,name:$('#nm').value.trim()||em().split('@')[0]});
+ else if(MODE==='signin')r=await api('/api/auth/sign-in/email',{email:em(),password:$('#pw').value});
+ else r=await api('/api/auth/sign-in/email-otp',{email:em(),otp:$('#otp').value.trim()});
+ r.ok?boot():aerr(r)}finally{b.disabled=false}}
+async function sendOtp(){if(!em())return $('#authErr').textContent='请先填邮箱';const r=await api('/api/auth/email-otp/send-verification-otp',{email:em(),type:'sign-in'});
+ if(!r.ok)return aerr(r);$('#authErr').textContent='';log('OTP sent');const d=await api('/api/dev/otp?email='+encodeURIComponent(em()));if(d.ok&&d.j.otp){$('#otp').value=d.j.otp;$('#authErr').innerHTML='<span style="color:var(--ok)">开发模式：验证码已自动填入</span>'}else $('#authErr').innerHTML='<span class="mut">验证码已发送</span>'}
+$('#pw').onkeydown=$('#otp').onkeydown=e=>{if(e.key==='Enter')doAuth()};
+async function signOut(){await api('/api/auth/sign-out',{});ME=null;showAuth()}
+function showAuth(){$('#appShell').classList.add('hide');$('#authScreen').classList.remove('hide')}
+
+/* ---------- shell ---------- */
+async function boot(){const r=await fetch('/api/me',{credentials:'include'});if(!r.ok)return showAuth();const meJ=await r.json();ME=meJ.user;BUTLER=meJ.butler||{};applyButlerName(BUTLER.name||BUTLER.display_name||DEFAULT_BUTLER);
+ $('#authScreen').classList.add('hide');$('#appShell').classList.remove('hide');
+ $('#meAv').textContent=ini(ME.name||ME.email);$('#meName').textContent=ME.name||ME.email;$('#meEmail').textContent=ME.email;
+ if(!CAT){const c=await api('/api/agents');CAT=c.ok?(c.j.agents||[]):[]}
+ applyButlerName(BUTLER_NAME);
+ await loadRooms();const want=location.hash.slice(1);
+ if(want&&want!=='dm'&&ROOMS.find(x=>x.id===want))openRoom(want);else if(!want&&ROOMS[0])openRoom(ROOMS[0].id);else openDM()}
+function openButlerSettings(){$('#butlerNameIn').value=BUTLER_NAME===DEFAULT_BUTLER?'':BUTLER_NAME;$('#butlerErr').textContent='';$('#butlerModal').classList.remove('hide');$('#butlerNameIn').focus()}
+function closeButlerSettings(){$('#butlerModal').classList.add('hide')}
+async function saveButlerName(){const v=$('#butlerNameIn').value.trim();if(!v||v.length>32){$('#butlerErr').textContent='请输入 1–32 个字符';return}
+ const r=await api('/api/butler/profile',{display_name:v},'PATCH');if(!r.ok){$('#butlerErr').textContent=r.j.error||('失败 '+r.status);return}
+ BUTLER=r.j.butler||{};applyButlerName(BUTLER.name||v);closeButlerSettings();if(CUR&&CUR.type==='dm')loadMsgs()}
+async function loadRooms(){const {ok,j}=await api('/api/rooms');if(!ok)return;ROOMS=j.rooms||[];INV=j.invites||[];renderSide()}
+function renderSide(){$('#roomCount').textContent=ROOMS.length||'';
+ $('#roomList').innerHTML=ROOMS.map(r=>`<div class="item ${CUR&&CUR.type==='room'&&CUR.id===r.id?'on':''}" onclick="openRoom('${r.id}')"><span>💬</span><span class="n">${h(r.name)}</span><span class="badge ${r.role==='owner'?'owner':''}">${roleLabel(r.role)}</span></div>`).join('')||'<div class="mut" style="padding:8px 10px;font-size:13px">还没有群，新建一个吧</div>';
+ $('#invBox').innerHTML=INV.length?'<div class="sec">待处理邀请</div>'+INV.map(i=>`<div class="inv"><span>邀请你加入「${h(i.name)}」</span><button onclick="accept('${i.id}')">接受</button></div>`).join(''):'';
+ $('#dmItem').classList.toggle('on',!!CUR&&CUR.type==='dm')}
+const roleLabel=r=>r==='owner'?'群主':r==='admin'?'管理员':'成员';
+async function mkRoom(){const n=$('#rn').value.trim();if(!n)return $('#rn').focus();const r=await api('/api/rooms',{name:n});if(r.ok){$('#rn').value='';await loadRooms();openRoom(r.j.room.id)}}
+async function accept(id){const r=await api(`/api/rooms/invites/${id}/accept`,{});if(r.ok){await loadRooms();openRoom(r.j.room_id)}}
+
+function setHead(title,role,agents){$('#hTitle').textContent=title;$('#hRole').textContent=role||'';$('#hRole').className='badge'+(role==='群主'?' owner':'')+(role?'':' hide');
+ $('#hAgents').innerHTML=(agents||[]).map(a=>`<span class="chip">🤖 ${h(aName(a))}</span>`).join(' ')}
+async function openDM(){CUR={type:'dm'};location.hash='dm';$('#appShell').classList.add('dm');$('#panel').classList.add('hide');renderSide();
+ setHead('🤖 '+BUTLER_NAME+' 私聊','',['orchestrator']);$('#txt').placeholder='私聊'+BUTLER_NAME+'… Enter 发送';await loadMsgs()}
+async function openRoom(id){CUR={type:'room',id};location.hash=id;$('#appShell').classList.remove('dm');$('#panel').classList.remove('hide');renderSide();
+ const r=ROOMS.find(x=>x.id===id);setHead('💬 '+(r?r.name:'群聊'),r&&roleLabel(r.role),['orchestrator']);$('#txt').placeholder='在群里发言，@'+BUTLER_NAME+' @调研 @工程师 点名回复（默认管家）… Enter 发送';
+ loadDetail(id);await loadMsgs()}
+ANAME.orchestrator=BUTLER_NAME;let CAT=null;
+const aName=id=>{const hit=(CAT||[]).find(a=>a.id===id);return (hit&&hit.name)||ANAME[id]||id;};
+function unagent(t){const s=String(t??'');const m=s.match(/^\s*\[agent:([\w-]+)\]\s*/)||s.match(/\[agent:([\w-]+)\]\s*/);if(!m)return{id:'orchestrator',text:s};const id=m[1];const text=s.replace(m[0],'').replace(/^\s*\[agent:[\w-]+\]\s*/,'').trim();return{id,text}}
+async function addAgent(){const v=$('#agSel').value;if(!v||!CUR)return;const r=await api(`/api/rooms/${CUR.id}/agents`,{agentId:v});if(r.ok)loadDetail(CUR.id)}
+async function loadDetail(id){const {ok,j}=await api(`/api/rooms/${id}`);if(!ok||!CUR||CUR.id!==id)return;
+ setHead('💬 '+j.room.name,roleLabel(j.role),(j.agents||[]).map(a=>a.agent_id));
+ $('#memCount').textContent=j.members.length;
+ $('#memList').innerHTML=j.members.map(m=>`<div class="pm"><div class="av">${h(ini(m.name||m.email))}</div><div class="t"><div>👤 ${h(m.name||m.email||m.user_id)}${m.user_id===ME.id?' <small class="mut">(我)</small>':''}</div><small class="mut">${h(m.email||'')}</small></div><span class="badge ${m.role==='owner'?'owner':''}">${roleLabel(m.role)}</span></div>`).join('');
+ $('#agentList').innerHTML=(j.agents||[]).map(a=>`<div class="pm"><div class="av bot">🤖</div><div class="t"><div>${h(aName(a.agent_id))}</div><small class="mut">${h(a.agent_id)}</small></div></div>`).join('')||'<div class="mut pm">无</div>';
+ const admin=j.role==='owner'||j.role==='admin';if(!CAT){const c=await api('/api/agents');CAT=c.ok?c.j.agents:[]}
+ const have=new Set((j.agents||[]).map(a=>a.agent_id)),left=CAT.filter(a=>!have.has(a.id));
+ if(admin&&left.length)$('#agentList').insertAdjacentHTML('beforeend',`<div class="pm"><select id="agSel">${left.map(a=>`<option value="${a.id}">${h(a.name)}</option>`).join('')}</select><button onclick="addAgent()">添加</button></div>`);
+ $('#invSec').classList.toggle('hide',!admin);
+ $('#pendList').innerHTML=(j.pendingInvites||[]).map(i=>`<div class="pm"><div class="t"><div>✉️ ${h(i.email)}</div><small class="mut">${new Date(i.created_at).toLocaleString()}</small></div><span class="badge">待接受</span></div>`).join('')||'<div class="mut pm" style="font-size:12px">无</div>'}
+async function invite(){const e=$('#invEm').value.trim();if(!e||!CUR||CUR.type!=='room')return;const r=await api(`/api/rooms/${CUR.id}/invites`,{email:e});
+ $('#invMsg').textContent=r.ok?'已邀请 '+e+'（对方用该邮箱登录后接受）':(r.j.error||'失败');if(r.ok){$('#invEm').value='';loadDetail(CUR.id)}}
+
+/* ---------- messages ---------- */
+function renderChat(msgs){const list=msgs.filter(m=>m.role==='user'||m.role==='assistant');
+ if(!list.length)return `<div class="empty">${CUR.type==='dm'?('👋 和'+h(BUTLER_NAME)+'打个招呼吧<br><small>私聊内容只有你和'+h(BUTLER_NAME)+'可见</small>'):'💬 群里还没有消息<br><small>发一条消息，管家会在群里回复；邀请朋友一起聊</small>'}</div>`;
+ return list.map(m=>{const t=msgText(m.content);if(m.role==='assistant'){const g=unagent(t);return bubble('🤖 '+aName(g.id),g.text,false,true)}
+  const u=unturn(t);const mine=CUR.type==='dm'||u.uid===ME.id||(!u.uid&&u.who===(ME.name||ME.email));return bubble('👤 '+(u.who||ME.name||'我'),u.text,mine,false)}).join('')}
+const bubble=(who,text,mine,bot)=>`<div class="msg ${mine?'mine':''}"><div class="av ${bot?'bot':''}">${bot?'🤖':h(ini(who.replace('👤 ','')))}</div><div><div class="who">${h(who)}</div><div class="bub">${h(text)}</div></div></div>`;
+const histUrl=()=>CUR.type==='dm'?'/api/butler/messages':`/api/rooms/${CUR.id}/messages`;
+async function loadMsgs(){const key=JSON.stringify(CUR);$('#msgs').innerHTML='<div class="empty">加载中…</div>';const {ok,j}=await api(histUrl());if(key!==JSON.stringify(CUR))return;
+ $('#msgs').innerHTML=ok?renderChat(j.messages||[]):'<div class="empty">加载失败</div>';$('#msgs').scrollTop=1e9}
+async function send(){const t=$('#txt').value.trim();if(!t||BUSY||!CUR)return;BUSY=true;$('#sendBtn').disabled=true;$('#txt').value='';
+ const box=$('#msgs');box.querySelector('.empty')?.remove();box.insertAdjacentHTML('beforeend',bubble('👤 '+(ME.name||'我'),t,true,false)+'<div class="msg" id="typ"><div class="av bot">🤖</div><div><div class="who">🤖 agent 思考中</div><div class="bub typing"><span></span><span></span><span></span></div></div></div>');box.scrollTop=1e9;
+ const key=JSON.stringify(CUR);const r=await api(histUrl(),{text:t});BUSY=false;$('#sendBtn').disabled=false;
+ if(key!==JSON.stringify(CUR))return;if(!r.ok){$('#typ')?.remove();box.insertAdjacentHTML('beforeend',`<div class="empty" style="padding:8px;color:var(--err)">发送失败：${h(r.j.detail||r.j.error||r.status)}</div>`);return}
+ await loadMsgs();$('#txt').focus()}
+$('#txt').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send()}};
+authTab('signin');boot();
+</script></body></html>

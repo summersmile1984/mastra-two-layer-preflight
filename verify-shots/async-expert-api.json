@@ -1,0 +1,65 @@
+{
+  "when": "2026-11-02 17:53:23 Asia/Shanghai",
+  "productModel": "L1=butler only; experts=L2 via l2_tasks.expert_id",
+  "roomId": "1e61c0c9-dcfb-4785-bc6b-cc04363dc1cf",
+  "post": {
+    "thread": "room_1e61c0c9-dcfb-4785-bc6b-cc04363dc1cf",
+    "replies": [
+      {
+        "agentId": "orchestrator",
+        "name": "小助手MVP",
+        "reply": "已派给调研专家，好了会推回来。"
+      }
+    ],
+    "dispatched": [
+      {
+        "expertId": "researcher",
+        "jobId": "e-7b4fa516-b809-4d39-b3e0-39cc4f5c477f"
+      }
+    ],
+    "reply": "已派给调研专家，好了会推回来。"
+  },
+  "http_meta": "HTTP:200 TIME:0.668529",
+  "post_latency_hint": "TIME~0.67s for ack+dispatched (not waiting expert)",
+  "polls": [
+    {
+      "i": 0,
+      "n_msgs": 5,
+      "hit": true,
+      "last_assist": [
+        {
+          "role": "assistant",
+          "text": "[agent:researcher] RAG（检索增强生成）三点概括：\n\n1. **先查再答**：模型回答问题前，先从外部知识库检索相关内容，而非只靠参数记忆。\n2. **检索+生成结合**：把检索到的片段作为上下文喂给大模型，让它基于事实生成回答。\n3. **降幻觉、易更新**：知识放在外部库里可随时更新，回答有据可依，减少编造、提升可追溯性。"
+        },
+        {
+          "role": "assistant",
+          "text": "[agent:orchestrator] 已派给调研专家，好了会推回来。"
+        },
+        {
+          "role": "assistant",
+          "text": "[agent:researcher] 1. **取数方式**：REST 按固定端点返回资源，易过度或不足取数；GraphQL 单端点、按需声明字段，客户端精确取数。\n2. **复杂度**：REST 简单直观、缓存与 HTTP 语义天然成熟；GraphQL 灵活但引入 schema、解析器与 N+1 等额外工程成本。\n3. **取舍**：多端需求差异大、字段多变选 GraphQL；接口稳定、强调缓存与简单性选 REST，二者也可混合使用。"
+        }
+      ]
+    }
+  ],
+  "expert_found": true,
+  "expert_msg": {
+    "role": "assistant",
+    "text": "[agent:researcher] 1. **取数方式**：REST 按固定端点返回资源，易过度或不足取数；GraphQL 单端点、按需声明字段，客户端精确取数。\n2. **复杂度**：REST 简单直观、缓存与 HTTP 语义天然成熟；GraphQL 灵活但引入 schema、解析器与 N+1 等额外工程成本。\n3. **取舍**：多端需求差异大、字段多变选 GraphQL；接口稳定、强调缓存与简单性选 REST，二者也可混合使用。"
+  },
+  "d1": {
+    "task_id": "e-7b4fa516-b809-4d39-b3e0-39cc4f5c477f",
+    "expert_id": "researcher",
+    "state": "completed",
+    "duration_ms_approx": 2803,
+    "reply_preview": "REST vs GraphQL 三句对比（已完成）"
+  },
+  "revisedFlow": [
+    "User @mentions expert in room → POST /api/rooms/:id/messages",
+    "L1 roomTurn: enqueueExpertJob → INSERT l2_tasks(expert_id) → waitUntil(runL2ExpertJob)",
+    "Immediate L1 ack: replies + dispatched[{expertId,jobId}] (~0.67s)",
+    "L2 Workers runner: claim working → AGENTS[expertId].generate → push [agent:id] into thread",
+    "UI polls GET messages until [agent:researcher] appears",
+    "PC /l2-claim skips expert_id rows (sandbox only)"
+  ]
+}

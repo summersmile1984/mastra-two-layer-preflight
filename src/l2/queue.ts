@@ -12,8 +12,8 @@ import type { Job, L2Event, Runtime } from '../protocol';
 
 export class JobQueue extends EventEmitter {
   jobs = new Map<string, Job>();
-  private pending: Record<Runtime, Job[]> = { cloud: [], local: [] };
-  private waiters: Record<Runtime, Array<(j: Job) => void>> = { cloud: [], local: [] };
+  private pending: Record<Runtime, Job[]> = { cloud: [], local: [], cua: [] };
+  private waiters: Record<Runtime, Array<(j: Job) => void>> = { cloud: [], local: [], cua: [] };
 
   assign(input: { sessionId: string; prompt: string; runtime: Runtime }): Job {
     const job: Job = { id: 'job_' + randomUUID().slice(0, 6), ...input, status: 'queued', progress: [], followUps: [], createdAt: new Date().toISOString() };

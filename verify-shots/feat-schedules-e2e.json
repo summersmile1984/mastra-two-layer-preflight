@@ -1,0 +1,80 @@
+{
+  "feature": "feat-schedules-e2e",
+  "version": "0.2.1",
+  "at": "2026-11-02T22:27:32+0800",
+  "timezone_label": "Asia/Shanghai",
+  "cron_trigger": "* * * * *",
+  "cron_tick_fire": {
+    "ok": true,
+    "checked": 1,
+    "fired": [
+      {
+        "runId": "sr-e5c36e4a-376",
+        "status": "ok",
+        "detail": "定时任务烟雾测试 SCH_OK_1793629556 已收到，一切正常。",
+        "next_run_at": 1793629620000
+      }
+    ],
+    "at": "2026-11-02T14:26:17.057Z"
+  },
+  "api_create": {
+    "schedule": {
+      "id": "sch-8280d567-0",
+      "name": "UI演示早报",
+      "cron": "0 9 * * *",
+      "timezone": "Asia/Shanghai",
+      "prompt": "用一句话说早上好，并带上标记 SCHED_UI_OK",
+      "target_type": "butler",
+      "target_id": null,
+      "enabled": true,
+      "next_run_at": 1793667600000,
+      "last_run_at": null,
+      "created_at": 1793629616942,
+      "updated_at": 1793629616942
+    }
+  },
+  "api_list": {
+    "schedules": [
+      {
+        "id": "sch-8280d567-0",
+        "name": "UI演示早报",
+        "cron": "0 9 * * *",
+        "timezone": "Asia/Shanghai",
+        "prompt": "用一句话说早上好，并带上标记 SCHED_UI_OK",
+        "target_type": "butler",
+        "target_id": null,
+        "enabled": true,
+        "next_run_at": 1793667600000,
+        "last_run_at": null,
+        "created_at": 1793629616942,
+        "updated_at": 1793629616942
+      }
+    ],
+    "presets": {
+      "every_minute": "* * * * *",
+      "hourly": "0 * * * *",
+      "daily_9": "0 9 * * *",
+      "weekdays_9": "0 9 * * 1-5",
+      "weekly_mon_9": "0 9 * * 1"
+    }
+  },
+  "api_manual_run": {
+    "ok": true,
+    "runId": "sr-2555ceb2-7dd",
+    "status": "ok",
+    "detail": "早上好！☀️ 新的一天开始啦，标记 SCHED_UI_OK，祝您今天顺顺利利。",
+    "next_run_at": 1793667600000
+  },
+  "api_runs": {
+    "runs": [
+      {
+        "id": "sr-2555ceb2-7dd",
+        "status": "ok",
+        "detail": "早上好！☀️ 新的一天开始啦，标记 SCHED_UI_OK，祝您今天顺顺利利。",
+        "created_at": 1793629626212
+      }
+    ]
+  },
+  "test_account_left": "sch-e2e-1793629590@example.com (signup via /api/auth/sign-up/email); schedule sch-8280d567-0 + sch-e2e-29556 (disabled? still enabled every minute for e2e user h4ao… — disable e2e cron schedule)",
+  "default_perms": "execute+mcp:github allow"
+}

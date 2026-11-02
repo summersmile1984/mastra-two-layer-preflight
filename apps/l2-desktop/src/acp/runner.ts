@@ -1,13 +1,16 @@
 import type { ClaimTask } from '@mastra-preflight/shared';
 
 /**
- * ACP runner stub — real impl will call local harness (dsh --profile acp / Claude / Codex)
- * via @mastra/acp or the existing runAcpPrompt in src/l2/a2a-l2.ts.
+ * Real ACP runner: reuse repo `runAcpPrompt` (AcpAgent + dsh --profile acp).
+ * Same path as `npm run start:l2-pull` / src/l2-pull-worker.ts. Not a stub.
  */
 export async function runAcp(task: ClaimTask): Promise<{ ok: true; text: string }> {
-  console.log('[acp] stub run', task.taskId, (task.prompt || '').slice(0, 80));
-  return {
-    ok: true,
-    text: `[acp-stub] completed task ${task.taskId} (runtime=${task.runtime ?? 'n/a'}). Prompt length=${(task.prompt || '').length}`,
-  };
+  const mod: any = await import('../../../../src/l2/a2a-l2.js');
+  const runtime = task.runtime === 'local' ? 'local' : 'cloud';
+  console.log('[acp] real run', task.taskId, runtime, (task.prompt || '').slice(0, 80));
+  if (process.env.ACP_DRY_RUN === '1') {
+    console.warn('[acp] ACP_DRY_RUN=1 — not real harness');
+  }
+  const text = await mod.runAcpPrompt(String(task.prompt || ''), runtime);
+  return { ok: true, text };
 }

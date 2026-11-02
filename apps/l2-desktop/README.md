@@ -1,66 +1,80 @@
-# L2 Desktop (scaffold)
+# Mastra Desktop (`apps/l2-desktop`)
 
-Local second-layer runtime that **actively claims** tasks from L1 Cloudflare Worker, then runs them via **ACP** (agent coding protocol / shell harness) or **CUA** (computer-use agent).
+PC desktop app (Tauri 2 + TypeScript): **interactive chat UI** + **L2 agent runtime** in one install.
 
-## Shell
+- **Chat**: embeds live L1 SPA at `{L1_URL}/app` (soft light product UI).
+- **L2 panel**: start/stop claim loop, last claim / ACP|CUA kind, queue hint.
+- **Settings**: L1 URL + device token → `~/.config/mastra-l2/device.json`.
+- **Runtime**: claims from `POST /l2-claim`, runs ACP (`dsh --profile acp` via `runAcpPrompt`) or CUA (`cua` CLI), pushes `POST /a2a-callback`.
 
-- **Preferred:** [Tauri 2](https://v2.tauri.app/) + TypeScript (`src-tauri/` is a minimal placeholder).
-- **Fallback:** plain Node (`npm run claim:dev`) — same claim/dispatch/ACP+CUA stubs as the future Tauri sidecars.
-- Full GUI scaffold (when you have Rust toolchain):
+## Prerequisites (macOS)
+
+- Node 20+ (Node 24 OK)
+- Rust stable (`rustc` / `cargo`) — Xcode CLT required
+- Optional for real tasks: `dsh --profile acp`, trycua `cua` + `cua-spacesd` (Screen Recording; Accessibility recommended)
+
+```bash
+# one-time
+xcode-select --install   # if needed
+curl https://sh.rustup.rs -sSf | sh
+```
+
+## Dev on Mac
 
 ```bash
 cd apps/l2-desktop
-npm create tauri-app@latest . -- --template vanilla-ts
-# merge generated src-tauri with our claim loop under src/
+npm install
+# optional: regenerate platform icons from icons/icon.png
+# npx tauri icon src-tauri/icons/icon.png
+
+# pair device (token is the same secret as Worker PUSH_TOKEN — do not commit)
+mkdir -p ~/.config/mastra-l2
+cat > ~/.config/mastra-l2/device.json <<'JSON'
+{
+  "l1Url": "https://mastra-l1.summersmile1984.workers.dev",
+  "token": "YOUR_DEVICE_TOKEN",
+  "intervalMs": 2000
+}
+JSON
+
+npm run tauri:dev
 ```
+
+Window: ~1200×800 soft light chrome — chat WebView + L2 side panel.
+
+Headless claim loop only (no window):
+
+```bash
+npm run claim:dev
+```
+
+## Scripts
+
+| Script | Purpose |
+|---|---|
+| `npm run tauri:dev` | Vite UI + Tauri window |
+| `npm run tauri:build` | Release `.app` / installers |
+| `npm run claim:dev` | Node claim loop sidecar |
+| `npm run check` | `tsc` for runtime + UI |
 
 ## Layout
 
 | Path | Role |
 |---|---|
-| `src/main.ts` | Claim loop entry |
-| `src/claim.ts` | `POST {L1}/l2-claim` + `POST {L1}/a2a-callback` (same as repo `src/l2-pull-worker.ts`) |
-| `src/dispatch.ts` | `task.kind` / `runtime` → `'acp' \| 'cua'` |
-| `src/acp/runner.ts` | ACP stub (log + fake success) |
-| `src/cua/runner.ts` | CUA loop interface: screenshot → act → loop (**stub**; needs OS permissions) |
-| `src/config.ts` | `L1_PULL_URL`, `PUSH_TOKEN` / `L2_DEVICE_TOKEN`, optional `~/.config/mastra-l2/device.json` |
-| `../../packages/shared` | `ClaimTask`, `TaskKind`, callback payload types |
-
-## Pairing / env
-
-```bash
-export L1_PULL_URL=https://mastra-l1.summersmile1984.workers.dev
-export PUSH_TOKEN=…          # same secret as Worker PUSH_TOKEN (device pairing token for now)
-# optional:
-export L2_PULL_INTERVAL_MS=2000
-export L2_DEVICE_TOKEN=…     # alias for PUSH_TOKEN
-```
-
-Or write `~/.config/mastra-l2/device.json`:
-
-```json
-{ "l1Url": "https://mastra-l1.summersmile1984.workers.dev", "token": "…", "intervalMs": 2000 }
-```
-
-L1 contract (already live):
-
-- `POST /l2-claim` — `Authorization: Bearer <token>` or `X-A2A-Notification-Token`
-- Returns `{ task: { taskId, prompt, runtime, threadId } | null }`
-- Complete via A2A Task POST `/a2a-callback`
+| `ui/` | Soft light desktop chrome (status + settings) |
+| `src/` | Claim / ACP / CUA Node runtime (sidecar) |
+| `src-tauri/` | Tauri 2 shell (spawn/stop loop, settings IO) |
+| `../../packages/shared` | Claim/callback types |
 
 ## ACP vs CUA
 
-- **ACP:** local coding/shell harness (dsh / Claude / Codex). Stub returns fake success; wire to `runAcpPrompt` later.
-- **CUA:** computer-use loop (screenshot → model → click/type). **Stub only** until the desktop app has OS permissions (macOS Screen Recording + Accessibility, Windows UI Automation, etc.). Do not expect real desktop control from this scaffold.
+- **ACP**: real `runAcpPrompt` (`@mastra/acp` + `dsh`). Set `ACP_DRY_RUN=1` only as last resort.
+- **CUA**: real `cua do …` via `src/l2/cua-cli.ts` when claim `kind`/`runtime` is `cua`.
 
-## Dev
+L1 already accepts `dispatch_to_sandbox({ runtime: 'cua' })` and `/l2-claim` returns `kind`.
 
-```bash
-cd apps/l2-desktop
-npm i
-npm run check          # tsc --noEmit
-# needs PUSH_TOKEN:
-npm run claim:dev
-```
+## Notes
 
-Root repo still has `npm run start:l2-pull` for the production-ish Node pull worker; this package is the desktop-oriented scaffold.
+- Do not print device/PUSH tokens in docs or screenshots.
+- Grok Bot Desktop is IA reference only — no branding/assets copied.
+- Electron fallback is not used; this package is Tauri 2.

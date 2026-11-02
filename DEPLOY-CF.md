@@ -15,8 +15,13 @@
 | L2 → Worker A2A push（公网回调 + token 校验） | ✅ 已验证（2026-11-02） |
 | Worker → L2 经 trycloudflare 快速隧道 | ❌ 本验证环境出网封锁 argotunnel 7844（QUIC/HTTP2 均失败，Error 1033）；需在可出网机器上重跑 |
 | **P0：Mastra L1 官方 CloudflareDeployer + D1**（`src/mastra/index.ts`，agent `orchestrator`，DeepSeek） | ✅ 已部署 https://mastra-l1.summersmile1984.workers.dev/api/agents ；`/health-l1`（自定义路由不带 `/api` 前缀） |
-| **P1：聊天 UI 由 Worker 提供**（Workers Static Assets `cf-public/index.html` → 流式 `POST /api/agents/orchestrator/stream`，Memory 存 D1，thread=前端 sid） | ✅ https://mastra-l1.summersmile1984.workers.dev/ |
+| **P1：聊天 UI 由 Worker 提供**（Workers Static Assets；现行 SPA=`apps/web` → `/app`；`index.html` 仍为早期流式 demo） | ✅ https://mastra-l1.summersmile1984.workers.dev/app |
 | 完整 L1（AgentController + UI + SSE + A2A 回调）跑在 Workers | ⏳ P1+，见 [docs/MASTRA-CF-L1-PLAN.md](docs/MASTRA-CF-L1-PLAN.md) |
+
+
+## L1 SPA 前端
+- 源码：`apps/web`（Vite+React+shadcn/Tailwind）。`npm run web:dev` 本地；`npm run cf:deploy` 会先 `apps/web` build 再拷进 `.mastra/output/static`。
+- 验证：`curl -sL https://mastra-l1…/app | rg ui-spa-light`；登录后浅色侧栏+气泡。
 
 ## 0. L1 部署（P0）
 ```bash

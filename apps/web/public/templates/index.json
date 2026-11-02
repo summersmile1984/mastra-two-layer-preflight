@@ -1,0 +1,17 @@
+[
+  {
+    "id": "research-pack",
+    "name": "调研专家包",
+    "file": "research-pack.json"
+  },
+  {
+    "id": "code-buddy",
+    "name": "代码同伴",
+    "file": "code-buddy.json"
+  },
+  {
+    "id": "cs-butler",
+    "name": "客服管家",
+    "file": "cs-butler.json"
+  }
+]

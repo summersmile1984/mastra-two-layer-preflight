@@ -5,10 +5,12 @@ export type TaskKind = 'acp' | 'cua' | string;
 export type ClaimTask = {
   taskId: string;
   prompt: string;
-  /** L1 historically uses runtime local|cloud; map to kind via dispatch. */
-  runtime?: 'local' | 'cloud' | string;
+  /** L1: cloud | local | cua (computer-use). */
+  runtime?: 'local' | 'cloud' | 'cua' | string;
+  /** Derived on claim: cua when runtime is cua/computer, else acp. */
   kind?: TaskKind;
   threadId?: string;
+  expertId?: string | null;
 };
 
 export type ClaimResponse = {
