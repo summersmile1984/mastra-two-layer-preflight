@@ -1,0 +1,19 @@
+{
+  "name": "@mastra-preflight/l2-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "L2 desktop claim loop (Tauri 2 shell preferred; Node claim stubs work today)",
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "claim:dev": "tsx --env-file-if-exists=.env src/main.ts",
+    "tauri:init": "echo 'Run: npm create tauri-app@latest . -- --template vanilla-ts (see README)'"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "tsx": "^4.23.15",
+    "typescript": "^5.8.0"
+  }
+}

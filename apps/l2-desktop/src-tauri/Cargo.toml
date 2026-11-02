@@ -1,0 +1,8 @@
+[package]
+name = "mastra-l2-desktop"
+version = "0.1.0"
+description = "Scaffold only — run `npm create tauri-app` to generate full Tauri 2 sources"
+edition = "2021"
+
+[dependencies]
+# Intentionally empty scaffold. After `npm create tauri-app`, replace with real tauri deps.

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Mastra L2 Desktop",
+  "version": "0.1.0",
+  "identifier": "dev.summersmile.mastra-l2",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420"
+  },
+  "app": {
+    "windows": [{ "title": "Mastra L2", "width": 960, "height": 640 }],
+    "security": { "csp": null }
+  },
+  "bundle": { "active": false }
+}
