@@ -1,4 +1,4 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>管家 · 群聊</title>
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="Cache-Control" content="no-cache"><meta name="viewport" content="width=device-width,initial-scale=1"><title>管家 · 群聊</title>
 <style>
 :root{--bg:#0f1115;--panel:#161a21;--panel2:#1d222b;--line:#2a303b;--fg:#e6e9ef;--mut:#8b93a3;--acc:#5b8cff;--acc2:#3d6be0;--me:#2b4a8f;--bot:#232a35;--ok:#3fb67a;--warn:#e0a03d;--err:#e06363}
 *{box-sizing:border-box}html,body{height:100%}body{margin:0;font:14px/1.55 -apple-system,"PingFang SC","Noto Sans SC",system-ui,sans-serif;background:var(--bg);color:var(--fg)}
@@ -78,7 +78,7 @@ const $=s=>document.querySelector(s),log=t=>{const l=$('#log');l.textContent=new
 const h=s=>String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 const api=async(p,b,m)=>{const r=await fetch(p,{method:m||(b?'POST':'GET'),credentials:'include',headers:b?{'content-type':'application/json'}:{},body:b?JSON.stringify(b):undefined});const j=await r.json().catch(()=>({}));if(!r.ok){log(r.status+' '+p+' '+JSON.stringify(j));if(r.status===401&&!p.startsWith('/api/auth/'))showAuth()}return {ok:r.ok,status:r.status,j}};
 const unturn=s=>{const m=String(s).match(/^<turn[^>]*from_name="([^"]*)"[^>]*>([\s\S]*)<\/turn>$/);const d=x=>x.replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&');const fu=String(s).match(/from_user="([^"]*)"/);return m?{who:d(m[1]),uid:fu&&fu[1],text:d(m[2])}:{who:null,uid:null,text:s}};
-const msgText=c=>{if(typeof c==='string'){try{c=JSON.parse(c)}catch{return c}}if(typeof c==='string')return c;if(c&&typeof c.content==='string')return c.content;if(c&&Array.isArray(c.parts))return c.parts.filter(p=>p.type==='text').map(p=>p.text).join('');return JSON.stringify(c)};
+const msgText=c=>{if(typeof c==='string'){try{c=JSON.parse(c)}catch{return c}}if(typeof c==='string')return c;if(c&&Array.isArray(c.parts)){const t=c.parts.filter(p=>p&&p.type==='text').map(p=>p.text||'').join('');if(t)return t}if(c&&typeof c.content==='string')return c.content;return typeof c==='string'?c:JSON.stringify(c)};
 const ini=s=>(String(s||'?').trim()[0]||'?').toUpperCase();
 let ME=null,ROOMS=[],INV=[],CUR=null,BUSY=false,MODE='signin';
 
@@ -102,6 +102,7 @@ function showAuth(){$('#appShell').classList.add('hide');$('#authScreen').classL
 async function boot(){const r=await fetch('/api/me',{credentials:'include'});if(!r.ok)return showAuth();ME=(await r.json()).user;
  $('#authScreen').classList.add('hide');$('#appShell').classList.remove('hide');
  $('#meAv').textContent=ini(ME.name||ME.email);$('#meName').textContent=ME.name||ME.email;$('#meEmail').textContent=ME.email;
+ if(!CAT){const c=await api('/api/agents');CAT=c.ok?(c.j.agents||[]):[]}
  await loadRooms();const want=location.hash.slice(1);
  if(want&&want!=='dm'&&ROOMS.find(x=>x.id===want))openRoom(want);else if(!want&&ROOMS[0])openRoom(ROOMS[0].id);else openDM()}
 async function loadRooms(){const {ok,j}=await api('/api/rooms');if(!ok)return;ROOMS=j.rooms||[];INV=j.invites||[];renderSide()}
@@ -121,8 +122,8 @@ async function openRoom(id){CUR={type:'room',id};location.hash=id;$('#appShell')
  const r=ROOMS.find(x=>x.id===id);setHead('💬 '+(r?r.name:'群聊'),r&&roleLabel(r.role),['orchestrator']);$('#txt').placeholder='在群里发言，@管家 @调研 @工程师 点名回复（默认管家）… Enter 发送';
  loadDetail(id);await loadMsgs()}
 const ANAME={orchestrator:'管家 Orchestrator',researcher:'调研专家',coder:'工程师'};let CAT=null;
-const aName=id=>ANAME[id]||id;
-function unagent(t){const m=String(t).match(/^\s*\[agent:([\w-]+)\]\s*/);return m?{id:m[1],text:t.slice(m[0].length)}:{id:'orchestrator',text:t}}
+const aName=id=>{const hit=(CAT||[]).find(a=>a.id===id);return (hit&&hit.name)||ANAME[id]||id;};
+function unagent(t){const s=String(t??'');const m=s.match(/^\s*\[agent:([\w-]+)\]\s*/)||s.match(/\[agent:([\w-]+)\]\s*/);if(!m)return{id:'orchestrator',text:s};const id=m[1];const text=s.replace(m[0],'').replace(/^\s*\[agent:[\w-]+\]\s*/,'').trim();return{id,text}}
 async function addAgent(){const v=$('#agSel').value;if(!v||!CUR)return;const r=await api(`/api/rooms/${CUR.id}/agents`,{agentId:v});if(r.ok)loadDetail(CUR.id)}
 async function loadDetail(id){const {ok,j}=await api(`/api/rooms/${id}`);if(!ok||!CUR||CUR.id!==id)return;
  setHead('💬 '+j.room.name,roleLabel(j.role),(j.agents||[]).map(a=>a.agent_id));
