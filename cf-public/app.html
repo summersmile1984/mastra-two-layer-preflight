@@ -1,5 +1,5 @@
 <!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mastra L1 · Login & Rooms</title>
-<style>body{font:14px system-ui;max-width:720px;margin:20px auto;padding:0 12px}fieldset{margin:10px 0}input{margin:2px}#log{white-space:pre-wrap;background:#f4f4f4;padding:8px;min-height:80px}.hide{display:none}</style>
+<style>body{font:14px system-ui;max-width:720px;margin:20px auto;padding:0 12px}fieldset{margin:10px 0}input{margin:2px}#log{white-space:pre-wrap;background:#f4f4f4;padding:8px;min-height:80px}.hide{display:none}.chat{border:1px solid #ddd;border-radius:8px;padding:10px;background:#fafafa;max-height:520px;overflow:auto}.msg{margin:8px 0;padding:8px 10px;border-radius:8px;max-width:85%;white-space:pre-wrap}.msg.user{background:#dcf2ff;margin-left:auto}.msg.bot{background:#fff;border:1px solid #e5e5e5}.msg b{display:block;font-size:12px;color:#555;margin-bottom:2px}</style>
 <h2>Mastra L1 — 登录 / 群聊 (Better Auth + rooms)</h2>
 <div id="who"></div>
 <fieldset id="auth"><legend>Sign up / Sign in</legend>
@@ -9,13 +9,20 @@
 <fieldset id="app" class="hide"><legend>Rooms</legend>
 <input id="rn" placeholder="room name"><button onclick="mkRoom()">Create room</button> <button onclick="out()">Sign out</button>
 <div id="rooms"></div><div id="invites"></div>
-<select id="sel"></select> <input id="inv" placeholder="invite email"><button onclick="invite()">Invite</button><br>
+<select id="sel" onchange="showRoom()"></select> <input id="inv" placeholder="invite email"><button onclick="invite()">Invite</button><br>
 <input id="txt" size="50" placeholder="message"><button onclick="send()">Send to room</button><button onclick="dm()">Send to Butler (DM)</button></fieldset>
+<div id="roomhead"></div><div id="chat" class="chat hide"></div>
 <div id="log"></div>
 <p><a href="/">→ legacy chat UI (needs login now)</a></p>
 <script>
 const $=s=>document.querySelector(s),log=t=>$('#log').textContent=t+'\n'+$('#log').textContent;
 const api=async(p,b,m)=>{const r=await fetch(p,{method:m||(b?'POST':'GET'),credentials:'include',headers:b?{'content-type':'application/json'}:{},body:b?JSON.stringify(b):undefined});const j=await r.json().catch(()=>({}));if(!r.ok)log(r.status+' '+p+' '+JSON.stringify(j));return {ok:r.ok,j}};
+const unturn=s=>{const m=String(s).match(/^<turn[^>]*from_name="([^"]*)"[^>]*>([\s\S]*)<\/turn>$/);const d=x=>x.replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&');return m?{who:d(m[1]),text:d(m[2])}:{who:null,text:s}};
+const msgText=c=>{if(typeof c==='string'){try{c=JSON.parse(c)}catch{return c}}if(typeof c==='string')return c;if(c&&typeof c.content==='string')return c.content;if(c&&Array.isArray(c.parts))return c.parts.filter(p=>p.type==='text').map(p=>p.text).join('');return JSON.stringify(c)};
+const h=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');
+const renderChat=msgs=>msgs.filter(m=>m.role==='user'||m.role==='assistant').map(m=>{const t=msgText(m.content);if(m.role==='assistant')return `<div class="msg bot"><b>🤖 管家 Orchestrator</b><div>${h(t)}</div></div>`;const u=unturn(t);return `<div class="msg user"><b>👤 ${h(u.who||'用户')}</b><div>${h(u.text)}</div></div>`}).join('')||'<i>暂无消息</i>';
+let RM=[];
+async function showRoom(){const id=$('#sel').value,r=RM.find(x=>x.id===id);if(!r)return;$('#roomhead').innerHTML=`<h3>💬 ${h(r.name)} <small>（我的角色：${r.role==="owner"?"群主":"成员"} · 成员：我 + 🤖 管家 Orchestrator）</small></h3>`;const {ok,j}=await api(`/api/rooms/${id}/messages`);$('#chat').classList.remove('hide');$('#chat').innerHTML=ok?renderChat(j.messages||[]):'加载失败';$('#chat').scrollTop=1e9}
 const em=()=>$('#em').value.trim();
 async function signup(){(await api('/api/auth/sign-up/email',{email:em(),password:$('#pw').value,name:$('#nm').value||em()})).ok&&load()}
 async function signin(){(await api('/api/auth/sign-in/email',{email:em(),password:$('#pw').value})).ok&&load()}
@@ -25,12 +32,12 @@ async function out(){await api('/api/auth/sign-out',{});location.reload()}
 async function mkRoom(){(await api('/api/rooms',{name:$('#rn').value||'room'})).ok&&load()}
 async function invite(){const r=await api(`/api/rooms/${$('#sel').value}/invites`,{email:$('#inv').value});r.ok&&log('invited '+r.j.invite.email)}
 async function accept(id){(await api(`/api/rooms/invites/${id}/accept`,{})).ok&&load()}
-async function send(){log('you → room: '+$('#txt').value);const r=await api(`/api/rooms/${$('#sel').value}/messages`,{text:$('#txt').value});r.ok&&log('butler: '+r.j.reply)}
+async function send(){log('you → room: '+$('#txt').value);const r=await api(`/api/rooms/${$('#sel').value}/messages`,{text:$('#txt').value});r.ok&&log('butler: '+r.j.reply);showRoom()}
 async function dm(){log('you → butler: '+$('#txt').value);const r=await api('/api/butler/messages',{text:$('#txt').value});r.ok&&log('butler (DM): '+r.j.reply)}
 async function load(){const me=await fetch('/api/me',{credentials:'include'});if(!me.ok){$('#who').textContent='Not signed in';return}
 const u=(await me.json()).user;$('#who').textContent='Signed in: '+u.email;$('#app').classList.remove('hide');
-const {j}=await api('/api/rooms');$('#sel').innerHTML=j.rooms.map(r=>`<option value="${r.id}">${r.name} (${r.role})</option>`).join('');
+const {j}=await api('/api/rooms');RM=j.rooms;$('#sel').innerHTML=j.rooms.map(r=>`<option value="${r.id}">${r.name} (${r.role})</option>`).join('');
 $('#rooms').textContent='Rooms: '+(j.rooms.map(r=>r.name).join(', ')||'none');
-$('#invites').innerHTML=j.invites.map(i=>`Invite to ${i.name} <button onclick="accept('${i.id}')">Accept</button>`).join('<br>')}
+$('#invites').innerHTML=j.invites.map(i=>`Invite to ${i.name} <button onclick="accept('${i.id}')">Accept</button>`).join('<br>');showRoom()}
 load();
 </script>
