@@ -47,3 +47,13 @@ curl -s -b j.txt "${H[@]}" -d '{"name":"demo"}' $B/api/rooms
 curl -s -b j.txt "${H[@]}" -d '{"text":"你好"}' $B/api/rooms/<roomId>/messages
 curl -s -b j.txt "${H[@]}" -d '{"text":"你好"}' $B/api/butler/messages
 ```
+
+## Multi-agent rooms
+- `GET /api/agents` (session) → catalog `[{id,name,desc}]`: orchestrator(管家), researcher(调研专家), coder(工程师).
+- `POST /api/rooms/:id/agents {agentId}` / `DELETE /api/rooms/:id/agents/:agentId` — owner/admin; 400 unknown agent; orchestrator can't be removed.
+- `POST /api/rooms/:id/messages` reply rule (@mention routing):
+  - no @ / @管家 / @orchestrator → orchestrator; @调研/@researcher → researcher; @工程师/@coder → coder
+  - multiple @ → each mentioned room agent replies in order, same thread `room_{id}`
+  - @agent not in room (or unknown @word with no valid mention) → short error reply from 管家
+  - Response `{thread, replies:[{agentId,name,reply}], reply}`.
+- Storage: user turn saved once (`<turn …>` wrapper); each agent generates with `memory.options.readOnly` and its reply is saved as `[agent:<id>] text` so history recall keeps identity (UI strips the prefix). Butler DM stays orchestrator-only.

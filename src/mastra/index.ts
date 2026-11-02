@@ -116,6 +116,14 @@ const orchestrator = new Agent({
   memory: new Memory({ options: { lastMessages: 20 } }),
 });
 
+const RESEARCHER = `你是「调研专家」(researcher)，群聊里的调研/分析助手。擅长资料梳理、对比分析、归纳要点。
+你在多人多 agent 群聊中，历史里 <turn from_name=…> 是人类发言，以 [agent:xxx] 开头的是其他 agent 的发言。只以你自己的身份回复，不要替其他 agent 说话，回复开头不要加 [agent:…] 标记。简短，用中文。`;
+const CODER = `你是「工程师」(coder)，群聊里的编程助手。擅长写代码、排查 bug、解释技术方案，代码给最小可用示例。
+你在多人多 agent 群聊中，历史里 <turn from_name=…> 是人类发言，以 [agent:xxx] 开头的是其他 agent 的发言。只以你自己的身份回复，不要替其他 agent 说话，回复开头不要加 [agent:…] 标记。简短，用中文。`;
+const researcher = new Agent({ id: 'researcher', name: '调研专家', instructions: RESEARCHER, model: 'deepseek/deepseek-chat', memory: new Memory({ options: { lastMessages: 20 } }) });
+const coder = new Agent({ id: 'coder', name: '工程师', instructions: CODER, model: 'deepseek/deepseek-chat', memory: new Memory({ options: { lastMessages: 20 } }) });
+export const AGENTS: Record<string, Agent> = { orchestrator, researcher, coder } as any;
+
 const tokenOk = (got?: string | null) => {
   const want = E.PUSH_TOKEN ? String(E.PUSH_TOKEN) : '';
   if (!got || !want) return false;
@@ -159,7 +167,7 @@ const finalizeTask = async (taskId: string, state: string, text: string, src: st
 const pollL2 = (id: string) => pollL2Task(id, { url: () => normL2(String(E.L2_A2A_URL)), getState: async (tid) => { const { d, ready } = db(); await ready; return ((await d.prepare('SELECT state FROM l2_tasks WHERE task_id=?').bind(tid).first()) as any)?.state ?? null; }, terminal: TERMINAL, extract: extractTask, finalize: finalizeTask });
 
 export const mastra = new Mastra({
-  agents: { orchestrator },
+  agents: { orchestrator, researcher, coder },
   storage: new D1Store({ id: 'l1-d1', binding: E.DB }),
   deployer: new CloudflareDeployer({
     name: 'mastra-l1',
@@ -170,7 +178,7 @@ export const mastra = new Mastra({
   } as any),
   server: {
     // Better Auth + rooms + butler DM；auth gate for agent generate/stream. L2 routes below unaffected.
-    middleware: [appMiddleware({ env: E, agent: () => orchestrator }) as any],
+    middleware: [appMiddleware({ env: E, agent: () => orchestrator, agents: () => AGENTS }) as any],
     apiRoutes: [
       registerApiRoute('/health-l1', {
         method: 'GET',

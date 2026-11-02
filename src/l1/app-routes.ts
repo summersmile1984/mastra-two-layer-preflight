@@ -10,12 +10,28 @@
 import { timingSafeEqual } from 'node:crypto';
 import { createAuth, devMode } from '../auth';
 
-type Deps = { env: any; agent: () => any };
+type Deps = { env: any; agent: () => any; agents: () => Record<string, any> };
+export const CATALOG = [
+  { id: 'orchestrator', name: '管家 Orchestrator', desc: '默认管家：闲聊、派发后台任务' },
+  { id: 'researcher', name: '调研专家', desc: '调研/分析/归纳' },
+  { id: 'coder', name: '工程师', desc: '编程/排错/技术方案' },
+];
+const ALIAS: Record<string, string> = { '管家': 'orchestrator', orchestrator: 'orchestrator', '调研': 'researcher', '调研专家': 'researcher', researcher: 'researcher', '工程师': 'coder', coder: 'coder' };
+/** @mentions in order of appearance (deduped). Unknown @words returned separately. */
+export function parseMentions(text: string) {
+  const ids: string[] = [], unknown: string[] = [];
+  for (const mt of text.matchAll(/[@＠]([\p{L}\p{N}_-]+)/gu)) {
+    const w = mt[1]; const key = Object.keys(ALIAS).sort((a, b) => b.length - a.length).find(k => w.toLowerCase().startsWith(k.toLowerCase()));
+    if (key) { if (!ids.includes(ALIAS[key])) ids.push(ALIAS[key]); } else unknown.push(w);
+  }
+  return { ids, unknown };
+}
+const nameOf = (id: string) => CATALOG.find(a => a.id === id)?.name ?? id;
 const now = () => Date.now();
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } });
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-export function appMiddleware({ env, agent }: Deps) {
+export function appMiddleware({ env, agent, agents }: Deps) {
   let auth: ReturnType<typeof createAuth> | null = null;
   const getAuth = () => (auth ??= createAuth(env));
   const db = () => env.DB;
@@ -33,6 +49,31 @@ export function appMiddleware({ env, agent }: Deps) {
     return String(res?.text ?? '');
   };
 
+  const dbMsg = (role: 'user' | 'assistant', text: string, thread: string) => ({
+    id: crypto.randomUUID(), role, threadId: thread, resourceId: thread, createdAt: new Date(),
+    content: { format: 2, parts: [{ type: 'text', text }], content: text },
+  });
+  /** Room turn: persist the user turn once, then each target agent reads the thread (readOnly) and its reply is saved as `[agent:id] …`. */
+  const roomTurn = async (wrapped: string, thread: string, targets: string[], errNote?: string) => {
+    const mem = await agent().getMemory?.();
+    await mem.saveMessages({ messages: [dbMsg('user', wrapped, thread)] });
+    const replies: { agentId: string; name: string; reply: string }[] = [];
+    if (errNote) {
+      const reply = errNote;
+      await mem.saveMessages({ messages: [dbMsg('assistant', `[agent:orchestrator] ${reply}`, thread)] });
+      replies.push({ agentId: 'orchestrator', name: nameOf('orchestrator'), reply });
+    }
+    for (const id of targets) {
+      const a = agents()[id]; if (!a) continue;
+      const res: any = await a.generate(`（系统提示：现在轮到你「${nameOf(id)}」回复上面群聊里最新的人类发言；只以你自己的身份简短回复。）`,
+        { memory: { thread, resource: thread, options: { readOnly: true } }, maxSteps: 3 } as any);
+      const reply = String(res?.text ?? '').replace(/^\s*\[agent:[\w-]+\]\s*/, '').trim();
+      await mem.saveMessages({ messages: [dbMsg('assistant', `[agent:${id}] ${reply}`, thread)] });
+      replies.push({ agentId: id, name: nameOf(id), reply });
+    }
+    return replies;
+  };
+
   return async (c: any, next: () => Promise<void>) => {
     const req: Request = c.req.raw;
     const url = new URL(req.url);
@@ -42,7 +83,7 @@ export function appMiddleware({ env, agent }: Deps) {
     if (p.startsWith('/api/auth/')) return getAuth().handler(req);
 
     const isAgentRun = /^\/api\/agents\/[^/]+\/(generate|stream)/.test(p) && m === 'POST';
-    const ours = p.startsWith('/api/rooms') || p.startsWith('/api/butler') || p === '/api/me' || p === '/api/dev/otp';
+    const ours = p.startsWith('/api/rooms') || p.startsWith('/api/butler') || p === '/api/me' || p === '/api/agents' || p === '/api/dev/otp';
     if (!ours && !isAgentRun) return next();
 
     if (p === '/api/dev/otp') {
@@ -130,6 +171,24 @@ export function appMiddleware({ env, agent }: Deps) {
       return json({ invite: { id, room_id: mm[1], email, status: 'pending' } }, 201);
     }
 
+    if (p === '/api/agents' && m === 'GET') return json({ agents: CATALOG });
+
+    mm = p.match(/^\/api\/rooms\/([\w-]+)\/agents(?:\/([\w-]+))?$/);
+    if (mm && (m === 'POST' || m === 'DELETE')) {
+      const role = await roleIn(mm[1]);
+      if (!role) return json({ error: 'not a member' }, 404);
+      if (role !== 'owner' && role !== 'admin') return json({ error: 'forbidden' }, 403);
+      const agentId = m === 'POST' ? String(((await req.json().catch(() => ({}))) as any).agentId ?? '') : String(mm[2] ?? '');
+      if (!CATALOG.some(a => a.id === agentId)) return json({ error: 'unknown agent' }, 400);
+      if (m === 'POST') await db().prepare('INSERT OR IGNORE INTO room_agents (room_id,agent_id,added_at) VALUES (?,?,?)').bind(mm[1], agentId, now()).run();
+      else {
+        if (agentId === 'orchestrator') return json({ error: 'cannot remove orchestrator' }, 400);
+        await db().prepare('DELETE FROM room_agents WHERE room_id=? AND agent_id=?').bind(mm[1], agentId).run();
+      }
+      const { results } = await db().prepare('SELECT agent_id, added_at FROM room_agents WHERE room_id=? ORDER BY added_at').bind(mm[1]).all();
+      return json({ ok: true, agents: results });
+    }
+
     mm = p.match(/^\/api\/rooms\/([\w-]+)\/messages$/);
     if (mm && (m === 'POST' || m === 'GET')) {
       const roomId = mm[1];
@@ -143,8 +202,21 @@ export function appMiddleware({ env, agent }: Deps) {
       const text = String(body.text ?? '').trim().slice(0, 8000);
       if (!text) return json({ error: 'text required' }, 400);
       const wrapped = `<turn room="${roomId}" from_user="${user.id}" from_name="${esc(String(user.name || user.email))}">${esc(text)}</turn>`;
-      try { return json({ thread, reply: await generate(wrapped, thread, thread) }); }
-      catch (e: any) { return json({ thread, error: 'agent failed', detail: String(e?.message ?? e).slice(0, 200) }, 502); }
+      const { results: ra } = await db().prepare('SELECT agent_id FROM room_agents WHERE room_id=?').bind(roomId).all();
+      const inRoom = new Set((ra as any[]).map(r => r.agent_id));
+      const { ids, unknown } = parseMentions(text);
+      const missing = ids.filter(i => !inRoom.has(i));
+      let targets = ids.filter(i => inRoom.has(i));
+      let errNote: string | undefined;
+      if (missing.length || (unknown.length && !ids.length)) {
+        const what = [...missing.map(nameOf), ...unknown.map(u => '@' + u)].join('、');
+        errNote = `${what} 不在本群的 agent 列表里，请群主先添加。`;
+      }
+      if (!targets.length && !errNote) targets = ['orchestrator'];
+      try {
+        const replies = await roomTurn(wrapped, thread, targets, errNote);
+        return json({ thread, replies, reply: replies.map(r => r.reply).join('\n\n') });
+      } catch (e: any) { return json({ thread, error: 'agent failed', detail: String(e?.message ?? e).slice(0, 200) }, 502); }
     }
 
     if (p === '/api/butler/messages' && m === 'GET') {
