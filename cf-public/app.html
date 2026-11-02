@@ -1,0 +1,36 @@
+<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mastra L1 · Login & Rooms</title>
+<style>body{font:14px system-ui;max-width:720px;margin:20px auto;padding:0 12px}fieldset{margin:10px 0}input{margin:2px}#log{white-space:pre-wrap;background:#f4f4f4;padding:8px;min-height:80px}.hide{display:none}</style>
+<h2>Mastra L1 — 登录 / 群聊 (Better Auth + rooms)</h2>
+<div id="who"></div>
+<fieldset id="auth"><legend>Sign up / Sign in</legend>
+<input id="em" placeholder="email"> <input id="pw" type="password" placeholder="password (≥8)"> <input id="nm" placeholder="name">
+<button onclick="signup()">Sign up</button> <button onclick="signin()">Sign in (password)</button><br>
+<button onclick="sendOtp()">Send OTP</button> <input id="otp" placeholder="OTP (dev: auto-filled)"> <button onclick="otpIn()">Sign in (OTP)</button></fieldset>
+<fieldset id="app" class="hide"><legend>Rooms</legend>
+<input id="rn" placeholder="room name"><button onclick="mkRoom()">Create room</button> <button onclick="out()">Sign out</button>
+<div id="rooms"></div><div id="invites"></div>
+<select id="sel"></select> <input id="inv" placeholder="invite email"><button onclick="invite()">Invite</button><br>
+<input id="txt" size="50" placeholder="message"><button onclick="send()">Send to room</button><button onclick="dm()">Send to Butler (DM)</button></fieldset>
+<div id="log"></div>
+<p><a href="/">→ legacy chat UI (needs login now)</a></p>
+<script>
+const $=s=>document.querySelector(s),log=t=>$('#log').textContent=t+'\n'+$('#log').textContent;
+const api=async(p,b,m)=>{const r=await fetch(p,{method:m||(b?'POST':'GET'),credentials:'include',headers:b?{'content-type':'application/json'}:{},body:b?JSON.stringify(b):undefined});const j=await r.json().catch(()=>({}));if(!r.ok)log(r.status+' '+p+' '+JSON.stringify(j));return {ok:r.ok,j}};
+const em=()=>$('#em').value.trim();
+async function signup(){(await api('/api/auth/sign-up/email',{email:em(),password:$('#pw').value,name:$('#nm').value||em()})).ok&&load()}
+async function signin(){(await api('/api/auth/sign-in/email',{email:em(),password:$('#pw').value})).ok&&load()}
+async function sendOtp(){const r=await api('/api/auth/email-otp/send-verification-otp',{email:em(),type:'sign-in'});if(r.ok){log('OTP sent');const d=await api('/api/dev/otp?email='+encodeURIComponent(em()));if(d.ok){$('#otp').value=d.j.otp;log('DEV MODE: OTP auto-filled')}}}
+async function otpIn(){(await api('/api/auth/sign-in/email-otp',{email:em(),otp:$('#otp').value})).ok&&load()}
+async function out(){await api('/api/auth/sign-out',{});location.reload()}
+async function mkRoom(){(await api('/api/rooms',{name:$('#rn').value||'room'})).ok&&load()}
+async function invite(){const r=await api(`/api/rooms/${$('#sel').value}/invites`,{email:$('#inv').value});r.ok&&log('invited '+r.j.invite.email)}
+async function accept(id){(await api(`/api/rooms/invites/${id}/accept`,{})).ok&&load()}
+async function send(){log('you → room: '+$('#txt').value);const r=await api(`/api/rooms/${$('#sel').value}/messages`,{text:$('#txt').value});r.ok&&log('butler: '+r.j.reply)}
+async function dm(){log('you → butler: '+$('#txt').value);const r=await api('/api/butler/messages',{text:$('#txt').value});r.ok&&log('butler (DM): '+r.j.reply)}
+async function load(){const me=await fetch('/api/me',{credentials:'include'});if(!me.ok){$('#who').textContent='Not signed in';return}
+const u=(await me.json()).user;$('#who').textContent='Signed in: '+u.email;$('#app').classList.remove('hide');
+const {j}=await api('/api/rooms');$('#sel').innerHTML=j.rooms.map(r=>`<option value="${r.id}">${r.name} (${r.role})</option>`).join('');
+$('#rooms').textContent='Rooms: '+(j.rooms.map(r=>r.name).join(', ')||'none');
+$('#invites').innerHTML=j.invites.map(i=>`Invite to ${i.name} <button onclick="accept('${i.id}')">Accept</button>`).join('<br>')}
+load();
+</script>

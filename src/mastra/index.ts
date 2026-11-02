@@ -34,6 +34,7 @@ import { D1Store } from '@mastra/cloudflare-d1';
 import { Memory } from '@mastra/memory';
 import { z } from 'zod';
 import { pollL2Task } from '../l1/poll-l2';
+import { appMiddleware } from '../l1/app-routes';
 
 const E = env as any;
 const L2_AGENT_ID = 'l2-worker';
@@ -168,6 +169,8 @@ export const mastra = new Mastra({
     d1_databases: [{ binding: 'DB', database_name: 'mastra-l1', database_id: '26a19832-8ff9-4fe4-a253-9305ae02f6bb' }],
   } as any),
   server: {
+    // Better Auth + rooms + butler DM；auth gate for agent generate/stream. L2 routes below unaffected.
+    middleware: [appMiddleware({ env: E, agent: () => orchestrator }) as any],
     apiRoutes: [
       registerApiRoute('/health-l1', {
         method: 'GET',

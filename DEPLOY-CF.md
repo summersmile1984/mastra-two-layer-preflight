@@ -96,3 +96,6 @@ To keep completion working without Mac outbound to workers.dev:
 - After a successful A2A `message/send`, the Worker schedules `waitUntil(pollL2(id))` (from `cloudflare:workers`), which polls L2 through the tunnel with A2A `tasks/get` until the task is terminal, then writes D1 and composes the reply.
 - `/a2a-callback` stays as the push path and is idempotent with the poller (whichever lands first wins). L2's push sender timeout is 30s.
 - Later: put L1 on a custom domain (not workers.dev) and point `L2_PUSH_ALLOWLIST` / `L1_PUBLIC_URL` at it so push works directly.
+
+## Auth & rooms
+See [AUTH.md](AUTH.md). Apply `migrations/0001_auth_rooms.sql` and set `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, (dev) `AUTH_DEV_MODE=1`. Agent generate/stream now needs a session (DEV bypass: Bearer PUSH_TOKEN).
