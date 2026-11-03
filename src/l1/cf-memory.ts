@@ -20,7 +20,6 @@ export function workersAiEmbedder(getAI: () => any) {
     async doEmbed({ values }: { values: string[] }) {
       const ai = getAI();
       if (!ai) throw new Error('AI binding missing');
-      console.log('[mem] embed', values.length);
       const r: any = await ai.run(CF_EMBED_MODEL, { text: values.map(v => String(v).slice(0, 8000)) });
       return { embeddings: r.data as number[][], usage: { tokens: 0 } };
     },
@@ -30,6 +29,8 @@ export function workersAiEmbedder(getAI: () => any) {
 const clean = (m: Record<string, any> = {}) => {
   const o: Record<string, any> = {};
   for (const [k, v] of Object.entries(m)) if (v != null && ['string', 'number', 'boolean'].includes(typeof v)) o[k] = typeof v === 'string' ? v.slice(0, 2000) : v;
+  // Normalize legacy room_{id} → room:{id} (and keep thread_id as room_*)
+  if (typeof o.resource_id === 'string' && /^room_[^:]/.test(o.resource_id)) o.resource_id = 'room:' + o.resource_id.slice(5);
   return o;
 };
 /** Mastra filter {thread_id:'x'} / {resource_id:{$eq:'y'}} → Vectorize filter */
@@ -53,7 +54,6 @@ export class VectorizeBindingVector extends MastraVector<any> {
   }
   async upsert(p: any) {
     const ids: string[] = p.ids ?? p.vectors.map(() => crypto.randomUUID());
-    console.log('[mem] vec upsert', p.vectors.length, JSON.stringify(p.metadata?.[0] ?? {}).slice(0, 120));
     if (p.deleteFilter) await this.deleteVectors({ indexName: p.indexName, filter: p.deleteFilter }).catch(() => null);
     await this.idx().upsert(p.vectors.map((v: number[], i: number) => ({ id: ids[i].slice(0, 64), values: v, metadata: clean(p.metadata?.[i]) })));
     return ids;

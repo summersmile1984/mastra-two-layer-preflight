@@ -10,7 +10,7 @@
 import { TEMPLATES, validateTemplate } from './templates';
 import { EXPERT_CATALOG } from './experts';
 
-export const L1_VERSION = '0.2.4';
+export const L1_VERSION = '0.2.7';
 export const L2_STUB_VERSION = '0.2.2-cua';
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } });
 const now = () => Date.now();
@@ -25,6 +25,7 @@ export const PERM_DEFAULTS: { key: string; label: string; desc: string; policy: 
 ];
 export const TOOL_CATEGORY: Record<string, string> = {
   job_status: 'read', dispatch_to_sandbox: 'execute', dispatch_to_expert: 'execute',
+  recall_room: 'read', post_to_room: 'execute', save_working_memory: 'execute',
 };
 export async function loadPermissions(db: any, userId: string) {
   const { results } = await db.prepare('SELECT category_or_tool, policy, updated_at FROM user_permission_rules WHERE user_id=?').bind(userId).all().catch(() => ({ results: [] }));
@@ -97,7 +98,7 @@ export async function userForThread(db: any, thread: string): Promise<string | n
 export type AgentDefRow = { id: string; owner_user_id: string; name: string; description: string | null; instructions: string; model: string | null; tools_json: string | null; mcp_json: string | null; memory_json: string | null; created_at: number; updated_at: number };
 const pj = (s: string | null | undefined, d: any) => { try { return s ? JSON.parse(s) : d; } catch { return d; } };
 export const defOut = (r: AgentDefRow) => ({ id: r.id, name: r.name, description: r.description ?? '', instructions: r.instructions, model: r.model ?? 'deepseek/deepseek-chat',
-  tools: pj(r.tools_json, []), mcp: pj(r.mcp_json, []), memory: pj(r.memory_json, { lastMessages: 20 }), created_at: r.created_at, updated_at: r.updated_at });
+  tools: pj(r.tools_json, []), mcp: pj(r.mcp_json, []), memory: { lastMessages: 20, workingMemory: false, semanticRecall: false, ...pj(r.memory_json, {}) }, created_at: r.created_at, updated_at: r.updated_at });
 export async function getAgentDef(db: any, id: string): Promise<AgentDefRow | null> {
   return (await db.prepare('SELECT * FROM agent_defs WHERE id=?').bind(id).first().catch(() => null)) as any;
 }
@@ -117,7 +118,11 @@ async function upsertDef(db: any, userId: string, b: any, id?: string) {
   const model = SUPPORTED_MODELS.includes(String(b.model)) ? String(b.model) : 'deepseek/deepseek-chat';
   const tools = Array.isArray(b.tools) ? b.tools.map(String).slice(0, 20) : [];
   const mcp = Array.isArray(b.mcp) ? b.mcp.map(String).slice(0, 10) : [];
-  const memory = { lastMessages: Math.min(100, Math.max(0, Number(b.memory?.lastMessages ?? 20) || 20)) };
+  const memory = {
+    lastMessages: Math.min(100, Math.max(0, Number(b.memory?.lastMessages ?? 20) || 20)),
+    workingMemory: b.memory?.workingMemory === true || b.memory?.workingMemory === 'true',
+    semanticRecall: b.memory?.semanticRecall === true || b.memory?.semanticRecall === 'true',
+  };
   const t = now();
   if (id) {
     const r = await db.prepare('UPDATE agent_defs SET name=?, description=?, instructions=?, model=?, tools_json=?, mcp_json=?, memory_json=?, updated_at=? WHERE id=? AND owner_user_id=?')

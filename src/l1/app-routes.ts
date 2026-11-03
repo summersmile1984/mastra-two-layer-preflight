@@ -19,6 +19,11 @@ import { createAuth, devMode } from '../auth';
 import { AGENT_CATALOG, isExpertId } from './experts';
 import { featureRoutes, loadPermissions, filterTools, decide, recordUsage, tokensOf, listAgentDefs, roomAgentDefs, resolveConnections, mcpListTools } from './features';
 import { scheduleRoutes, type FireDeps } from './schedules';
+import {
+  ensureDigestsSchema, listUserDigests, digestsContext, forceReconcileWorking,
+  deleteRoomDigests, roomResource, roomThread, promoteRoomConclusion,
+} from './digests';
+import { asUserTurn, participantsWorkingMemory } from './identity';
 
 type Deps = { buildMcpToolsets?: (conns: Awaited<ReturnType<typeof resolveConnections>>, allow: (tool: string, server: string) => boolean) => Promise<{ toolsets: Record<string, Record<string, any>>; injected: { server_id: string; tools: string[]; error?: string }[] }>; env: any; agent: () => any; agents: () => Record<string, any>; enqueueExpert?: (a: { roomId: string; threadId: string; expertId: string; prompt: string; userId: string }) => Promise<{ jobId: string }>; schedule?: (p: Promise<unknown>) => void; summarize?: (prompt: string) => Promise<string>; vector?: () => any };
 export const CATALOG = AGENT_CATALOG;
@@ -90,11 +95,10 @@ export async function maybeSummarize(d: any, thread: string, summarize: (prompt:
 async function getSummary(d: any, thread: string) {
   try { await ensureSummaryTable(d); return ((await d.prepare('SELECT summary FROM memory_summaries WHERE thread_id=?').bind(thread).first()) as any)?.summary ?? null; } catch { return null; }
 }
-const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 export function appMiddleware({ env, agent, agents, enqueueExpert, schedule, buildMcpToolsets, summarize, vector }: Deps) {
   const features = featureRoutes({ env, db: () => env.DB });
-  const ORCH_TOOLS = ['dispatch_to_sandbox', 'dispatch_to_expert'];
+  const ORCH_TOOLS = ['dispatch_to_sandbox', 'dispatch_to_expert', 'recall_room', 'post_to_room'];
   /** Permission-filtered activeTools + MCP toolsets for an orchestrator generate on behalf of userId. */
   const orchOpts = async (userId: string) => {
     const perm = await loadPermissions(env.DB, userId);
@@ -144,14 +148,31 @@ export function appMiddleware({ env, agent, agents, enqueueExpert, schedule, bui
     const o = await orchOpts(userId);
     const summary = await getSummary(env.DB, thread);
     const hits = await semRecall(text, { resource_id: resource });
-    const sys = [summary ? `早前对话摘要（较旧消息已压缩）：\n${summary}` : '', semContext(hits)].filter(Boolean).join('\n\n');
+    const digRows = resource.startsWith('user:') ? await listUserDigests(env.DB, userId, 8) : [];
+    const sys = [
+      summary ? `早前对话摘要（较旧消息已压缩）：\n${summary}` : '',
+      digestsContext(digRows),
+      semContext(hits),
+    ].filter(Boolean).join('\n\n');
     const context = sys ? [{ role: 'system', content: sys }] : undefined;
-    const res: any = await agent().generate(text, { memory: { thread, resource }, ...(context ? { context } : {}), maxSteps: 3, activeTools: [...o.activeTools, 'save_working_memory'], ...(o.toolsets ? { toolsets: o.toolsets } : {}) } as any);
+    const active = [...new Set([...o.activeTools, 'save_working_memory', 'recall_room', 'post_to_room'])];
+    const res: any = await agent().generate(text, { memory: { thread, resource }, ...(context ? { context } : {}), maxSteps: 4, activeTools: active, ...(o.toolsets ? { toolsets: o.toolsets } : {}) } as any);
     await recordUsage(env.DB, userId, 'l1_dm', tokensOf(res), { thread });
-    const idx = semIndex([{ id: crypto.randomUUID(), text, role: 'user' }, ...(res?.text ? [{ id: crypto.randomUUID(), text: String(res.text), role: 'assistant' }] : [])], thread, resource);
+    const reply = String(res?.text ?? '');
+    // FORCE working-memory reconcile every DM turn (do not rely on model calling the tool)
+    let wm: any = null;
+    if (resource.startsWith('user:') && summarize) {
+      try {
+        const mem = await agent().getMemory?.();
+        wm = await forceReconcileWorking({ mem, threadId: thread, resourceId: resource, userText: text, assistantText: reply, summarize });
+      } catch (e: any) { console.log('[mem] reconcile failed', String(e?.message ?? e).slice(0, 160)); wm = { ok: false, reason: String(e?.message ?? e).slice(0, 120) }; }
+    }
+    const idx = semIndex([{ id: crypto.randomUUID(), text, role: 'user' }, ...(reply ? [{ id: crypto.randomUUID(), text: reply, role: 'assistant' }] : [])], thread, resource);
     schedule ? schedule(idx) : await idx;
     (generate as any).lastHits = hits.length;
-    return { text: String(res?.text ?? ''), blocked: o.blocked, injected: o.injected };
+    (generate as any).lastDigests = digRows.length;
+    (generate as any).lastWm = wm;
+    return { text: reply, blocked: o.blocked, injected: o.injected, digestsInjected: digRows.length };
   };
 
   const dbMsg = (role: 'user' | 'assistant', text: string, thread: string, resource = thread) => ({
@@ -173,14 +194,15 @@ export function appMiddleware({ env, agent, agents, enqueueExpert, schedule, bui
     opts: { roomId: string; userId: string; userText: string; errNote?: string; isExpert: (id: string) => boolean },
   ) => {
     const mem = await agent().getMemory?.();
-    await mem.saveMessages({ messages: [dbMsg('user', wrapped, thread)] });
+    const rres = roomResource(opts.roomId);
+    await mem.saveMessages({ messages: [dbMsg('user', wrapped, thread, rres)] });
     const roomHits = await semRecall(opts.userText, { thread_id: thread });
-    { const idx = semIndex([{ id: crypto.randomUUID(), text: opts.userText, role: 'user' }], thread, thread); schedule ? schedule(idx) : await idx; }
+    { const idx = semIndex([{ id: crypto.randomUUID(), text: opts.userText, role: 'user' }], thread, rres); schedule ? schedule(idx) : await idx; }
     const replies: { agentId: string; name: string; reply: string }[] = [];
     const dispatched: { expertId: string; jobId: string }[] = [];
     if (opts.errNote) {
       const reply = opts.errNote;
-      await mem.saveMessages({ messages: [dbMsg('assistant', `[agent:orchestrator] ${reply}`, thread)] });
+      await mem.saveMessages({ messages: [dbMsg('assistant', `[agent:orchestrator] ${reply}`, thread, rres)] });
       replies.push({ agentId: 'orchestrator', name: nameOf('orchestrator'), reply });
     }
     const expertTargets = targets.filter(id => id !== 'orchestrator' && opts.isExpert(id));
@@ -199,7 +221,7 @@ export function appMiddleware({ env, agent, agents, enqueueExpert, schedule, bui
         dispatched.push({ expertId: id, jobId });
       } catch (e: any) {
         const reply = `派发 ${nameOf(id)} 失败：${String(e?.message ?? e).slice(0, 120)}`;
-        await mem.saveMessages({ messages: [dbMsg('assistant', `[agent:orchestrator] ${reply}`, thread)] });
+        await mem.saveMessages({ messages: [dbMsg('assistant', `[agent:orchestrator] ${reply}`, thread, rres)] });
         replies.push({ agentId: 'orchestrator', name: nameOf('orchestrator'), reply });
       }
     }
@@ -209,20 +231,20 @@ export function appMiddleware({ env, agent, agents, enqueueExpert, schedule, bui
       let reply: string;
       if (dispatched.length && !targets.includes('orchestrator')) {
         reply = `已派给${dispatched.map(d => nameOf(d.expertId)).join('、')}，好了会推回来。`;
-        await mem.saveMessages({ messages: [dbMsg('assistant', `[agent:orchestrator] ${reply}`, thread)] });
+        await mem.saveMessages({ messages: [dbMsg('assistant', `[agent:orchestrator] ${reply}`, thread, rres)] });
       } else if (dispatched.length && targets.includes('orchestrator')) {
         // Brief listing first, then optional fuller generate would block — keep brief.
         reply = `收到。已派给${dispatched.map(d => nameOf(d.expertId)).join('、')}处理，好了推回本群；有需要我再补充。`;
-        await mem.saveMessages({ messages: [dbMsg('assistant', `[agent:orchestrator] ${reply}`, thread)] });
+        await mem.saveMessages({ messages: [dbMsg('assistant', `[agent:orchestrator] ${reply}`, thread, rres)] });
       } else {
         // orchestrator-only: generate inline (L1)
         const a = agents()['orchestrator'] || agent();
         const o = await orchOpts(opts.userId);
         const res: any = await a.generate(`（系统提示：现在轮到你「${nameOf('orchestrator')}」回复上面群聊里最新的人类发言；只以你自己的身份简短回复。）`,
-          { memory: { thread, resource: thread, options: { readOnly: true } }, ...(roomHits.length ? { context: [{ role: 'system', content: semContext(roomHits) }] } : {}), maxSteps: 3, activeTools: o.activeTools, ...(o.toolsets ? { toolsets: o.toolsets } : {}) } as any);
+          { memory: { thread, resource: rres, options: { readOnly: true } }, ...(roomHits.length ? { context: [{ role: 'system', content: semContext(roomHits) }] } : {}), maxSteps: 3, activeTools: o.activeTools, ...(o.toolsets ? { toolsets: o.toolsets } : {}) } as any);
         await recordUsage(env.DB, opts.userId, 'l1_room', tokensOf(res), { roomId: opts.roomId });
         reply = String(res?.text ?? '').replace(/^\s*\[agent:[\w-]+\]\s*/, '').trim();
-        await mem.saveMessages({ messages: [dbMsg('assistant', `[agent:orchestrator] ${reply}`, thread)] });
+        await mem.saveMessages({ messages: [dbMsg('assistant', `[agent:orchestrator] ${reply}`, thread, rres)] });
       }
       replies.push({ agentId: 'orchestrator', name: nameOf('orchestrator'), reply: reply! });
     }
@@ -300,7 +322,7 @@ export function appMiddleware({ env, agent, agents, enqueueExpert, schedule, bui
             const row: any = await db().prepare('SELECT display_name FROM butler_profile WHERE user_id=?').bind(userId).first();
             return butlerDisplay(row?.display_name);
           })();
-          const wrapped = `<turn from_name="定时任务">${esc(text)}</turn>`;
+          const wrapped = asUserTurn({ id: 'system', name: '定时任务', role: 'scheduler' }, text).content;
           const r = await roomTurn(wrapped, room.thread_id, ['orchestrator'], nameOf(butler), {
             roomId, userId, userText: text, isExpert: isExpertId,
           });
@@ -350,7 +372,7 @@ export function appMiddleware({ env, agent, agents, enqueueExpert, schedule, bui
       let threadCreated = false;
       try {
         const mem = await agent().getMemory?.();
-        if (mem) { await mem.createThread({ threadId: thread, resourceId: thread, title: name }); threadCreated = true; }
+        if (mem) { await mem.createThread({ threadId: thread, resourceId: roomResource(id), title: name }); threadCreated = true; }
       } catch (e: any) { console.log('[rooms] createThread deferred', String(e?.message ?? e).slice(0, 120)); }
       return json({ room: { id, name, thread_id: thread, role: 'owner' }, agents: ['orchestrator'], threadCreated }, 201);
     }
@@ -418,6 +440,7 @@ export function appMiddleware({ env, agent, agents, enqueueExpert, schedule, bui
       try { const mem = await agent().getMemory?.(); await mem?.deleteThread(`room_${mm[1]}`); cleanup.thread = 'deleted'; } catch (e: any) { cleanup.thread = String(e?.message ?? e).slice(0, 120); }
       try { await db().prepare('DELETE FROM mastra_messages WHERE thread_id=?').bind(`room_${mm[1]}`).run(); } catch {}
       try { await ensureSummaryTable(db()); await db().prepare('DELETE FROM memory_summaries WHERE thread_id=?').bind(`room_${mm[1]}`).run(); } catch {}
+      try { await deleteRoomDigests(db(), mm[1]); cleanup.digests = 'deleted'; } catch (e: any) { cleanup.digests = String(e?.message ?? e).slice(0, 120); }
       try { await vector?.()?.deleteVectors({ indexName: 'x', filter: { thread_id: `room_${mm[1]}` } }); cleanup.vectors = 'deleted'; } catch (e: any) { cleanup.vectors = String(e?.message ?? e).slice(0, 120); }
       return json({ ok: true, deleted: mm[1], cleanup });
     }
@@ -498,16 +521,41 @@ export function appMiddleware({ env, agent, agents, enqueueExpert, schedule, bui
     mm = p.match(/^\/api\/rooms\/([\w-]+)\/messages$/);
     if (mm && (m === 'POST' || m === 'GET')) {
       const roomId = mm[1];
-      if (!(await roleIn(roomId))) return json({ error: 'not a member' }, 403);
+      const memberRole = await roleIn(roomId);
+      if (!memberRole) return json({ error: 'not a member' }, 403);
       const thread = `room_${roomId}`;
       if (m === 'GET') {
         const mem = await agent().getMemory?.();
-        const r = mem ? await mem.recall({ threadId: thread, resourceId: thread }).catch(() => ({ messages: [] })) : { messages: [] };
+        const r = mem ? await mem.recall({ threadId: thread, resourceId: roomResource(roomId) }).catch(() => ({ messages: [] })) : { messages: [] };
         return json({ thread, messages: (r.messages ?? []).map((x: any) => ({ role: x.role, content: x.content })) });
       }
       const text = String(body.text ?? '').trim().slice(0, 8000);
       if (!text) return json({ error: 'text required' }, 400);
-      const wrapped = `<turn room="${roomId}" from_user="${user.id}" from_name="${esc(String(user.name || user.email))}">${esc(text)}</turn>`;
+      // Official Mastra multi-user <turn> tags (server-side speaker from Better Auth + room_members.role).
+      const wrapped = asUserTurn(
+        { id: user.id, name: String(user.name || user.email), role: memberRole || 'member' },
+        text,
+        { room: roomId },
+      ).content;
+      // D1 lacks Observational Memory — refresh structured participants list in room WM (agent generate stays readOnly).
+      try {
+        const mem = await agent().getMemory?.();
+        const { results: memRows } = await db().prepare(
+          'SELECT rm.user_id, u.name, u.email, rm.role FROM room_members rm LEFT JOIN "user" u ON u.id=rm.user_id WHERE rm.room_id=? ORDER BY rm.joined_at',
+        ).bind(roomId).all();
+        const members = (memRows as any[]).map((r) => ({
+          id: String(r.user_id),
+          name: String(r.name || r.email || r.user_id),
+          role: String(r.role || 'member'),
+        }));
+        await mem?.updateWorkingMemory?.({
+          threadId: thread,
+          resourceId: roomResource(roomId),
+          workingMemory: participantsWorkingMemory(members),
+        });
+      } catch (e: any) {
+        console.log('[mem] room participants WM failed', String(e?.message ?? e).slice(0, 160));
+      }
       const { results: ra } = await db().prepare('SELECT agent_id FROM room_agents WHERE room_id=?').bind(roomId).all();
       const inRoom = new Set((ra as any[]).map(r => r.agent_id));
       const butler = await loadButler();
@@ -554,9 +602,29 @@ export function appMiddleware({ env, agent, agents, enqueueExpert, schedule, bui
       if (m === 'GET') {
         const wm = await mem?.getWorkingMemory?.({ threadId: thread, resourceId: resource }).catch(() => null);
         const n = Number(((await db().prepare('SELECT COUNT(*) n FROM mastra_messages WHERE thread_id=?').bind(thread).first()) as any)?.n ?? 0);
+        await ensureDigestsSchema(db());
+        const digests = await listUserDigests(db(), user.id, 12);
+        let legacyMigrate: any = undefined;
+        if (url.searchParams.get('migrateLegacy') === '1' && vector) {
+          try {
+            const { results: rooms } = await db().prepare(
+              'SELECT r.id FROM rooms r JOIN room_members rm ON rm.room_id=r.id WHERE rm.user_id=?').bind(user.id).all();
+            let deleted = 0;
+            for (const rm of (rooms as any[]).slice(0, 50)) {
+              const legacy = `room_${rm.id}`;
+              await vector().deleteVectors({ indexName: 'x', filter: { resource_id: legacy } }).catch(() => null);
+              deleted++;
+            }
+            legacyMigrate = { ok: true, roomsTouched: deleted, note: 'deleted legacy resource_id=room_{id}; new upserts use room:{id}' };
+          } catch (e: any) { legacyMigrate = { ok: false, error: String(e?.message ?? e).slice(0, 160) }; }
+        }
         return json({ thread, resource, messages: n, workingMemory: wm ?? null, summary: await getSummary(db(), thread),
+          digests: digests.map((d: any) => ({ id: d.id, room_id: d.room_id, room_name: d.room_name, conclusion: d.conclusion, source: d.source, created_at: d.created_at })),
           semanticRecall: { embedder: '@cf/baai/bge-m3', index: 'mastra-l1-memory', scope: 'resource', stats: await vector?.()?.describeIndex({ indexName: 'x' }).catch((e: any) => ({ error: String(e?.message ?? e) })) },
-          probe: url.searchParams.get('q') && vector ? await (async () => { const e: any = await (env as any).AI.run('@cf/baai/bge-m3', { text: [String(url.searchParams.get('q'))] }); const v = e.data[0]; const hits = await vector().query({ indexName: 'x', queryVector: v, topK: 3, filter: { resource_id: resource } }); return { dim: v.length, hits: hits.map((h: any) => ({ score: h.score, thread_id: h.metadata?.thread_id })) }; })().catch((e: any) => ({ error: String(e?.message ?? e).slice(0, 200) })) : undefined, workingMemoryScope: 'resource (DM only; rooms read-only, room resource=room thread)' });
+          probe: url.searchParams.get('q') && vector ? await (async () => { const e: any = await (env as any).AI.run('@cf/baai/bge-m3', { text: [String(url.searchParams.get('q'))] }); const v = e.data[0]; const hits = await vector().query({ indexName: 'x', queryVector: v, topK: 3, filter: { resource_id: resource } }); return { dim: v.length, hits: hits.map((h: any) => ({ score: h.score, thread_id: h.metadata?.thread_id })) }; })().catch((e: any) => ({ error: String(e?.message ?? e).slice(0, 200) })) : undefined,
+          workingMemoryScope: 'resource user: (DM force-reconcile); rooms resource room:{id} read-only',
+          dualResource: { dm: 'thread=dm_{uid} resource=user:{uid}', room: 'thread=room_{rid} resource=room:{rid}', crossRoom: 'room_digests → user digests + recall_room' },
+          legacyMigrate });
       }
       const what = url.searchParams.get('what') ?? 'working';
       const done: string[] = [];
@@ -588,7 +656,7 @@ export function appMiddleware({ env, agent, agents, enqueueExpert, schedule, bui
       try {
         const g = await generate(text, thread, dmResource(user.id), user.id);
         if (summarize) { const job = maybeSummarize(db(), thread, summarize).catch((e: any) => console.log('[mem] summarize failed', String(e?.message ?? e).slice(0, 160))); schedule ? schedule(job) : await job; }
-        return json({ thread, agentId: 'orchestrator', name: butler.name, reply: g.text, semanticHits: (generate as any).lastHits ?? 0, blockedTools: g.blocked, mcpInjected: g.injected });
+        return json({ thread, agentId: 'orchestrator', name: butler.name, reply: g.text, semanticHits: (generate as any).lastHits ?? 0, digestsInjected: g.digestsInjected ?? 0, workingReconcile: (generate as any).lastWm ?? null, blockedTools: g.blocked, mcpInjected: g.injected });
       } catch (e: any) { return json({ thread, error: 'agent failed', detail: String(e?.message ?? e).slice(0, 200) }, 502); }
     }
 
