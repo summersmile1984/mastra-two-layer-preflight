@@ -43,7 +43,11 @@ const jsonInit = (method: string, body?: unknown): RequestInit => ({
 
 export async function getSession(): Promise<User | null> {
   try {
-    const r = await fetch('/auth/get-session', { credentials: 'same-origin' });
+    // disableRefresh：跳过会话滚动续期写库（并发下会竞态出 500）；超时兜底避免卡死在加载态
+    const r = await fetch('/auth/get-session?disableRefresh=true', {
+      credentials: 'same-origin',
+      signal: AbortSignal.timeout(8000),
+    });
     if (!r.ok) return null;
     const s = await r.json();
     return s?.user?.id ? (s.user as User) : null;
