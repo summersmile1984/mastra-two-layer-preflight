@@ -12,7 +12,10 @@ export interface AiLike {
   run(model: string, input: { text: string[] }): Promise<{ data: number[][] }>;
 }
 
-export function createWorkersAiEmbedder(aiBinding: AiLike, modelId: string = BGE_M3_MODEL): MastraEmbeddingModel<string> {
+export function createWorkersAiEmbedder(
+  aiBinding: AiLike | (() => AiLike | undefined),
+  modelId: string = BGE_M3_MODEL,
+): MastraEmbeddingModel<string> {
   return {
     specificationVersion: 'v3',
     provider: 'cloudflare-workers-ai',
@@ -21,7 +24,10 @@ export function createWorkersAiEmbedder(aiBinding: AiLike, modelId: string = BGE
     supportsParallelCalls: true,
     async doEmbed({ values }: { values: string[] }) {
       if (!values.length) return { embeddings: [] };
-      const res = await aiBinding.run(modelId, { text: values });
+      // 绑定在请求期才注入 env——每次调用现取（兼容 thunk）
+      const ai = typeof aiBinding === 'function' ? aiBinding() : aiBinding;
+      if (!ai) throw new Error('Workers AI binding not ready (env.AI unavailable)');
+      const res = await ai.run(modelId, { text: values });
       const embeddings = res?.data;
       if (!Array.isArray(embeddings) || embeddings.length !== values.length) {
         throw new Error(`Workers AI embedder: expected ${values.length} embeddings from ${modelId}, got ${embeddings?.length ?? 0}`);

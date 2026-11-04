@@ -127,8 +127,9 @@ export function toVectorizeFilter(filter: VectorFilter | undefined | null): Reco
 }
 
 export class VectorizeStore extends MastraVector {
-  private readonly messageIndex: VectorizeIndex;
-  private readonly observationsIndex: VectorizeIndex;
+  /** 绑定在请求期才注入 env——统一存 thunk，每次调用现取。 */
+  private readonly messageIndexRef: () => VectorizeIndex | undefined;
+  private readonly observationsIndexRef: () => VectorizeIndex | undefined;
   readonly messageIndexName: string;
   readonly observationIndexName: string;
 
@@ -140,21 +141,27 @@ export class VectorizeStore extends MastraVector {
     observationIndexName = DEFAULT_OBSERVATION_INDEX_NAME,
   }: {
     id?: string;
-    index: VectorizeIndex;
-    observationsIndex?: VectorizeIndex;
+    index: VectorizeIndex | (() => VectorizeIndex | undefined);
+    observationsIndex?: VectorizeIndex | (() => VectorizeIndex | undefined);
     messageIndexName?: string;
     observationIndexName?: string;
   }) {
     super({ id });
-    this.messageIndex = index;
-    this.observationsIndex = observationsIndex ?? index;
+    const asRef = (v: VectorizeIndex | (() => VectorizeIndex | undefined) | undefined): (() => VectorizeIndex | undefined) =>
+      typeof v === 'function' ? v : () => v;
+    this.messageIndexRef = asRef(index);
+    this.observationsIndexRef = observationsIndex ? asRef(observationsIndex) : this.messageIndexRef;
     this.messageIndexName = messageIndexName;
     this.observationIndexName = observationIndexName;
   }
 
   /** 逻辑索引名 → 物理绑定（观测名路由到观测绑定，其余归消息绑定）。 */
   private resolve(indexName?: string): VectorizeIndex {
-    return indexName && indexName.startsWith('memory_observations') ? this.observationsIndex : this.messageIndex;
+    const binding = indexName && indexName.startsWith('memory_observations')
+      ? this.observationsIndexRef()
+      : this.messageIndexRef();
+    if (!binding) throw new Error('Vectorize binding not ready (env.VECTORIZE* unavailable)');
+    return binding;
   }
 
   private async describe(indexName?: string): Promise<VectorizeIndexInfo> {

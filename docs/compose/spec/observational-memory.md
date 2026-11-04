@@ -80,6 +80,14 @@ L1 秘书目前只记得每个房间最近 20 条消息（`src/mastra/index.ts:1
 - OM 存储异常（D1 报错）只记日志并跳过本周期，不影响对话主链路。
 - `PROBE/调试`：观测计数、generation 变化打 `console.log`（worker 日志可见），便于 tail 验证。
 
+### S2.8 OM 后台执行（Cloudflare Queues）
+
+OM 的观察/反思是后台周期，不能挤在请求生命周期里 fire-and-forget（Workers 响应结束即回收，观测永远不落库——已实测）。
+
+- 队列 `om-cycles`：请求侧只负责入队 `{ kind: 'observe' | 'reflect', threadId, resourceId }`（chat 流结束时 fire-and-forget send）。
+- worker `queue(batch)` consumer：独立 invocation 调 `memory.omEngine.observe({ threadId, resourceId })`（`kind: 'reflect'` 则 `reflect()`），自带重试/DLQ，CPU 预算独立。
+- 挂载方式：`export const queue = async (batch) => {...}` 经 worker-entry `export *` 暴露；cf-postbuild 给 wrangler.json 补 `queues.producers/consumers`。
+
 ## [S3] Out of Scope
 
 - KnowledgeStorage 全契约移植、`Subconscious`（remind/curate）实验面、pinned pages、knowledge tools（向量层只服务 Memory 的语义召回，不做 knowledge 域）。

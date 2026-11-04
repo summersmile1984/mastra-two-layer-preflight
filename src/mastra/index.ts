@@ -129,19 +129,21 @@ const dispatch_to_sandbox = createTool({
 
 // D1 存储单例：Mastra 与 Memory 共用；OM 扩展面装饰到 memory domain（observational-memory S2.1）。
 // 构建期（mastra build）没有运行时 env，store domain 初始化会抛——惰性安装，运行时冷启动即生效。
-const store = new D1Store({ id: 'l1-d1', binding: E.DB });
+// D1 存储单例：Mastra 与 Memory 共用；OM 扩展面装饰到 memory domain（observational-memory S2.1）。
+// 绑定（DB 等）在请求期才注入 env——store 必须懒建（构建器会把 new Mastra(...) 包成惰性工厂，请求期才调用）。
+let _store: any = null;
+const getStore = () => (_store ??= new D1Store({ id: 'l1-d1', binding: E.DB }));
 let omInstalled = false;
 const ensureOmInstalled = () => {
   if (omInstalled) return;
   try {
-    installD1OmSupport((store as any).stores?.memory, E.DB);
+    installD1OmSupport(getStore().stores?.memory, E.DB);
     omInstalled = true;
   } catch (e: any) {
     console.log('[OM] install deferred', String(e?.message ?? e).slice(0, 120));
   }
 };
-ensureOmInstalled();
-const vectorStore = new VectorizeStore({ index: E.VECTORIZE, observationsIndex: E.VECTORIZE_OBS });
+const vectorStore = new VectorizeStore({ index: () => E.VECTORIZE, observationsIndex: () => E.VECTORIZE_OBS });
 
 // 主人画像抽取（S2.3）：从【名字】发言归集稳定信息到 om_profiles（多用户共享 thread 时 working memory 装不下主人画像）
 const userProfileExtractor = new Extractor({
@@ -175,38 +177,41 @@ const userProfileExtractor = new Extractor({
   },
 });
 
+// 会话记忆：D1 + OM（Observer/Reflector 观测日志）+ Vectorize 语义召回；thread = roomId。
+// 不显式传 storage（构建期无 env 会炸 D1Store 初始化）；Memory 经 Mastra 注册拿到同一个 store。
+const memoryRef = new Memory({
+  vector: vectorStore,
+  embedder: createWorkersAiEmbedder(() => E.AI),
+  options: {
+    lastMessages: 20,
+    observationalMemory: {
+      model: 'deepseek/deepseek-chat',
+      retrieval: { vector: true },
+      observation: {
+        messageTokens: 2_000,
+        bufferTokens: 0.25,
+        bufferOnIdle: true,
+        activateAfterIdle: 300_000,
+        failurePolicy: 'continue',
+        instruction: '你是秘书的记忆观察员。重点记录发言者的身份/称呼、偏好、决定、承诺与待办、在做的事、重要事实；忽略寒暄。',
+        extract: [userProfileExtractor],
+      },
+      reflection: {
+        observationTokens: 8_000,
+        failurePolicy: 'continue',
+        instruction: '压缩合并时优先保留主人的身份/称呼/偏好/决定/待办/事实，丢弃寒暄与重复。',
+      },
+    },
+  },
+});
+
 const orchestrator = new Agent({
   id: 'orchestrator',
   name: 'orchestrator',
   instructions: INSTRUCTIONS,
   model: 'deepseek/deepseek-chat',
   tools: { dispatch_to_sandbox },
-  // 会话记忆：D1 + OM（Observer/Reflector 观测日志）+ Vectorize 语义召回；thread = roomId。
-  // 不显式传 storage（构建期无 env 会炸 D1Store 初始化）；Memory 经 Mastra 注册拿到同一个 store。
-  memory: new Memory({
-    vector: vectorStore,
-    embedder: createWorkersAiEmbedder(E.AI),
-    options: {
-      lastMessages: 20,
-      observationalMemory: {
-        model: 'deepseek/deepseek-chat',
-        retrieval: { vector: true },
-        observation: {
-          messageTokens: 2_000,
-          bufferOnIdle: true,
-          activateAfterIdle: 300_000,
-          failurePolicy: 'continue',
-          instruction: '你是秘书的记忆观察员。重点记录发言者的身份/称呼、偏好、决定、承诺与待办、在做的事、重要事实；忽略寒暄。',
-          extract: [userProfileExtractor],
-        },
-        reflection: {
-          observationTokens: 8_000,
-          failurePolicy: 'continue',
-          instruction: '压缩合并时优先保留主人的身份/称呼/偏好/决定/待办/事实，丢弃寒暄与重复。',
-        },
-      },
-    },
-  }),
+  memory: memoryRef,
 });
 
 const tokenOk = (got?: string | null) => {
@@ -265,7 +270,7 @@ const pollL2 = (id: string) => pollL2Task(id, { url: () => normL2(String(E.L2_A2
 
 export const mastra = new Mastra({
   agents: { orchestrator },
-  storage: store,
+  storage: getStore(),
   deployer: new CloudflareDeployer({
     name: 'mastra-l1',
     compatibility_date: '2026-10-01',
@@ -398,7 +403,23 @@ export const mastra = new Mastra({
               console.log('[OM] profile inject failed', String(e?.message ?? e).slice(0, 120));
             }
             const out = await orchestrator.stream(msgs, opts as any);
-            return { textStream: (out as any).textStream as ReadableStream<string> };
+            // OM 周期走队列（S2.8）：流结束只入队，queue consumer 独立 invocation 跑 Observer/Reflector。
+            // （fire-and-forget 在 Workers 会随响应结束被回收，实测观测永不落库。）
+            const src = (out as any).textStream as ReadableStream<string>;
+            const wrapped = src.pipeThrough(new TransformStream<string, string>({
+              flush() {
+                try {
+                  const threadId = String((opts as any)?.memory?.thread ?? '');
+                  const resourceId = String((opts as any)?.memory?.resource ?? '');
+                  if (threadId && E.OM_QUEUE?.send) {
+                    waitUntil(Promise.resolve(E.OM_QUEUE.send({ kind: 'observe', threadId, resourceId })).catch((e: any) => {
+                      console.log('[OM] enqueue failed', String(e?.message ?? e).slice(0, 120));
+                    }));
+                  }
+                } catch {}
+              },
+            }));
+            return { textStream: wrapped };
           },
         },
         // 闹钟语义：唤醒对应房间的 RoomDO，推送内容由 DO 读 D1（S2.3）
@@ -407,3 +428,61 @@ export const mastra = new Mastra({
     ],
   },
 });
+
+// OM 周期消费者（S2.8）：队列独立 invocation 跑 Observer/Reflector，自带重试/DLQ。
+// mastra build 只保留 mastra/default 导出，queue 出口由 worker-entry 经 globalThis 注册表转发。
+const omQueueHandler = async (batch: any) => {
+  console.log('[OM] cycle batch', JSON.stringify({ n: batch?.messages?.length ?? 0, bodies: (batch?.messages ?? []).map((m: any) => m?.body) }));
+  for (const msg of batch?.messages ?? []) {
+    const body: any = msg?.body ?? {};
+    const threadId = String(body.threadId ?? '');
+    const resourceId = String(body.resourceId || (threadId ? `room:${threadId}` : ''));
+    if (!threadId) {
+      try { msg.ack(); } catch {}
+      continue;
+    }
+    try {
+      ensureOmInstalled();
+      // 构建器把 new Mastra(...) 改写成惰性工厂，fetch 里才实例化；queue 调用必须自己触发，
+      // 否则 Memory 没注册、omEngine 解析为 null。
+      const m: any = mastra;
+      // 缓存 Mastra 实例：免费版 CPU 预算极小（约 10ms/次），每次重建整套 Mastra 太贵；
+      // 实例只用于把 storage 注册进 Memory，跨调用复用安全（memoryRef/orchestrator 本就是模块级单例）。
+      let _mastraInst: any = (globalThis as any).__omMastraInst;
+      if (!_mastraInst) {
+        _mastraInst = typeof m === 'function' ? m() : m;
+        (globalThis as any).__omMastraInst = _mastraInst;
+      }
+      const inst: any = _mastraInst;
+      // 注册是懒的（generate 的 memory 解析流程里才 setStorage）；queue 路径手动补：
+      // __registerMastra 只挂 mastra/logger，storage 要单独 setStorage，否则 omEngine 抛「requires a storage provider」。
+      try {
+        (memoryRef as any).__registerMastra?.(inst);
+        const st: any = inst?.getStorage?.();
+        if (st && !(memoryRef as any).hasOwnStorage) (memoryRef as any).setStorage?.(st);
+      } catch {}
+      const mem: any = memoryRef ?? (orchestrator as any).memory ?? inst?.getAgent?.('orchestrator')?.memory;
+      const engine = await mem?.omEngine;
+      if (!engine) {
+        let dom: any = null; let domErr = '';
+        try { dom = getStore().stores?.memory; } catch (e: any) { domErr = String(e?.message ?? e).slice(0, 80); }
+        throw new Error(`omEngine unavailable mem=${!!mem} mastraFn=${typeof m} dom=${!!dom} flag=${dom?.supportsObservationalMemory} domErr=${domErr}`);
+      }
+      if (body.kind === 'reflect' && typeof engine.reflect === 'function') {
+        await engine.reflect({ threadId, resourceId });
+      } else {
+        const res: any = await engine.observe({ threadId, resourceId, force: true });
+        console.log('[OM] observe result', JSON.stringify(res ?? null).slice(0, 300));
+      }
+      try { await mem?.settled?.(); } catch {}
+      console.log('[OM] cycle done', JSON.stringify({ kind: body.kind ?? 'observe', threadId }));
+      try { msg.ack(); } catch {}
+    } catch (e: any) {
+      console.log('[OM] cycle failed', JSON.stringify({ threadId, error: String(e?.message ?? e).slice(0, 160) }));
+      // omEngine 初始化失败会被缓存成拒绝态，清掉让下条消息重试
+      try { (memoryRef as any)._omEngine = null; (memoryRef as any)._omEngineInstance = null; } catch {}
+      try { msg.retry(); } catch {}
+    }
+  }
+};
+(globalThis as any).__omQueueHandler = omQueueHandler;

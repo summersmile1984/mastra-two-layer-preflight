@@ -23,9 +23,17 @@ writeFileSync(
   `${out}/worker-entry.mjs`,
   [
     "// 生成文件（cf-postbuild.mjs）：DO 类必须从 wrangler main 模块导出。",
-    "export { default } from './index.mjs';",
-    "export * from './index.mjs';",
+    "import base from './index.mjs';",
     "export { RoomDO } from './room-do.js';",
+    "// OM 队列消费者（S2.8）：queue 挂到 default 导出对象（Queues API 只认 export default.queue）+ 具名导出；",
+    "// 逻辑经 globalThis 注册表转发（mastra build 只保留 mastra/default 导出）。",
+    "async function queue(batch, env, ctx) {",
+    "  const handler = (globalThis).__omQueueHandler;",
+    "  if (!handler) { for (const m of batch?.messages ?? []) { try { m.retry(); } catch {} } return; }",
+    "  await handler(batch);",
+    "}",
+    "export { queue };",
+    "export default { ...base, queue };",
     '',
   ].join('\n'),
 );
@@ -44,5 +52,10 @@ w.vectorize = [
   { binding: 'VECTORIZE', index_name: 'om-memory' },
   { binding: 'VECTORIZE_OBS', index_name: 'om-memory-obs' },
 ];
+// OM 周期走队列（S2.8）：请求侧只入队，consumer 独立 invocation 跑 Observer/Reflector
+w.queues = {
+  producers: [{ queue: 'om-cycles', binding: 'OM_QUEUE' }],
+  consumers: [{ queue: 'om-cycles', max_retries: 10, retry_delay: 30 }],
+};
 writeFileSync(f, JSON.stringify(w, null, 2));
-console.log('[cf-postbuild] assets -> ./static, main -> ./worker-entry.mjs, DO binding ROOM_DO, AI + VECTORIZE(om-memory/om-memory-obs)');
+console.log('[cf-postbuild] assets -> ./static, main -> ./worker-entry.mjs, DO ROOM_DO, AI + VECTORIZE + queues(om-cycles)');
