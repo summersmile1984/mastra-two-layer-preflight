@@ -128,8 +128,6 @@ const dispatch_to_sandbox = createTool({
 });
 
 // D1 存储单例：Mastra 与 Memory 共用；OM 扩展面装饰到 memory domain（observational-memory S2.1）。
-// 构建期（mastra build）没有运行时 env，store domain 初始化会抛——惰性安装，运行时冷启动即生效。
-// D1 存储单例：Mastra 与 Memory 共用；OM 扩展面装饰到 memory domain（observational-memory S2.1）。
 // 绑定（DB 等）在请求期才注入 env——store 必须懒建（构建器会把 new Mastra(...) 包成惰性工厂，请求期才调用）。
 let _store: any = null;
 const getStore = () => (_store ??= new D1Store({ id: 'l1-d1', binding: E.DB }));
@@ -340,6 +338,38 @@ export const mastra = new Mastra({
           return c.json({ exportedAt: Date.now(), user: { id: u.id, name: u.name, email: u.email }, profile: payload, observations });
         },
       } as any),
+      // T7 生产实证探针（PROBE_ROUTES=1）：phase=up 走适配器 upsert；phase=del 走适配器 deleteVectors(filter)。
+      // Vectorize 索引水位线是分钟级最终一致——可见性/删除确认由调用方在外部轮询 REST 完成。
+      ...(E.PROBE_ROUTES === '1'
+        ? [
+            registerApiRoute('/probe/vector-del', {
+              method: 'GET',
+              requiresAuth: false,
+              handler: async (c: any) => {
+                try {
+                  ensureOmInstalled();
+                  const phase = String(c.req.query('phase') ?? 'up');
+                  const tag = String(c.req.query('tag') ?? `del-${Date.now()}`);
+                  const v1 = Array.from({ length: 1024 }, (_, i) => (i === 0 ? 1 : 0));
+                  const v2 = Array.from({ length: 1024 }, (_, i) => (i === 1 ? 1 : 0));
+                  if (phase === 'up') {
+                    await vectorStore.upsert({
+                      indexName: 'memory_messages_1024',
+                      vectors: [v1, v2],
+                      ids: [`${tag}-1`, `${tag}-2`],
+                      metadata: [{ thread_id: tag }, { thread_id: tag }],
+                    });
+                    return c.json({ ok: true, phase, tag });
+                  }
+                  await vectorStore.deleteVectors({ indexName: 'memory_messages_1024', filter: { thread_id: tag } });
+                  return c.json({ ok: true, phase: 'del', tag });
+                } catch (e: any) {
+                  return c.json({ ok: false, error: String(e?.message ?? e).slice(0, 300) });
+                }
+              },
+            } as any),
+          ]
+        : []),
       // L2 出站 PULL：原子领取一个 queued 任务 → working
       registerApiRoute('/l2-claim', {
         method: 'POST',
@@ -469,7 +499,8 @@ const omQueueHandler = async (batch: any) => {
         throw new Error(`omEngine unavailable mem=${!!mem} mastraFn=${typeof m} dom=${!!dom} flag=${dom?.supportsObservationalMemory} domErr=${domErr}`);
       }
       if (body.kind === 'reflect' && typeof engine.reflect === 'function') {
-        await engine.reflect({ threadId, resourceId });
+        // reflect 是位置参数（threadId, resourceId, prompt?），不是 opts 对象
+        await engine.reflect(threadId, resourceId);
       } else {
         const res: any = await engine.observe({ threadId, resourceId, force: true });
         console.log('[OM] observe result', JSON.stringify(res ?? null).slice(0, 300));

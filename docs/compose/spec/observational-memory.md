@@ -1,13 +1,17 @@
 ---
 feature: observational-memory
-status: in-progress
-updated: 2026-11-04
+status: delivered
+updated: 2026-11-05
 source: observational-memory
 ---
 
 # Observational Memory（OM）——秘书的长期记忆
 
 ## Report
+
+**What was built** — L1 秘书的长期记忆全链路：①`src/mastra/om-d1.ts` 把 Mastra `MemoryStorage` 的 OM 扩展面移植到 D1（`mastra_observational_memory` 表 + 全生命周期方法，CAS fencing，rollover 走 D1 batch 事务）；②`src/mastra/vectorize-store.ts` + `workers-ai-embedder.ts`：`MastraVector` 适配 Cloudflare Vectorize（`memory_messages_*`/`memory_observations_*` 双逻辑索引路由到 `VECTORIZE`/`VECTORIZE_OBS`，元数据过滤依赖 `thread_id`/`resource_id` 元数据索引）+ Workers AI bge-m3（1024 维）嵌入；③`src/mastra/profile.ts` 主人画像平面（Extractor 按 `【名字】` 发言者归集 → `om_profiles` → 注入上下文）；④orchestrator 的 Memory 启用 `observationalMemory`（Observer/Reflector 真 DeepSeek，阈值按聊天节奏）+ `retrieval:{vector:true}`；⑤OM 周期走 Cloudflare Queue `om-cycles`（请求侧只入队，consumer 独立 invocation 跑 observe/reflect——请求内 fire-and-forget 会被 Workers 回收，实测观测永不落库）；⑥检视/导出接口 `/om/profile`、`/om/observations`、`/om/export`（成员校验）。
+
+**Verification** — `node /tmp/om-d1-selftest.mjs`（D1 契约 64 用例含 batch rollover）PASS 64/64；`node /tmp/t7-check/sanity.mjs`（Vectorize 映射/路由/嵌入）PASS；生产实测（真 D1/DeepSeek/Vectorize/Workers AI）：聊天→队列→观测日志落库（多房间完整时间线含 🔴/🟢/✅ 标记）；`/om/profile` 抽出称呼/时区/偏好/在做的事/事实；跨新房间提问正确复述主人信息与项目 deadline；同房间改述语义回忆命中；非成员访问观测 403；Vectorize 适配器生产实证 upsert→过滤查询可见（2 条）→`deleteVectors({filter})`→归零（水位线最终一致约 45–75s）。已知环境约束：本账号为 Workers **免费版**，invocation CPU 预算极小（API 100328 拒绝配置 limits；tail 实测 `exceededCpu` 频发于重路径，OM 前即存在），队列 `max_retries:10` 兜底重试；**升级 Workers Paid 可消除**。消息向量（`om-memory` 索引）需另开 `options.semanticRecall`（本切片未启用，见 S3）。
 
 ## [S1] Problem
 
@@ -51,7 +55,7 @@ L1 秘书目前只记得每个房间最近 20 条消息（`src/mastra/index.ts:1
 
 ### S2.4 跨会话召回（recall，含向量语义检索）
 
-- `observationalMemory.retrieval: { vector: true }`（messages / threads / search / observations 四模式）。`search` 走语义相似度：消息与观测组被向量化入库，recall 工具可跨会话按语义找回历史。
+- `observationalMemory.retrieval: { vector: true }`（messages / threads / search / observations 四模式）。`search` 走语义相似度：**观测组**被向量化入库（`memory_observations_*`），recall 工具可按语义找回历史。消息向量（`memory_messages_*`）由经典 `options.semanticRecall` 门控，本切片未启用（见 S3）。
 - 向量层契约见 S2.7：Cloudflare Vectorize 承载向量，Workers AI `@cf/baai/bge-m3` 出嵌入（中英双语，1024 维，cosine）。
 - recall 工具自动注入 agent；instructions 提示：需要核实历史细节时先 recall（语义搜索或翻页）再回答。
 
@@ -91,22 +95,27 @@ OM 的观察/反思是后台周期，不能挤在请求生命周期里 fire-and-
 ## [S3] Out of Scope
 
 - KnowledgeStorage 全契约移植、`Subconscious`（remind/curate）实验面、pinned pages、knowledge tools（向量层只服务 Memory 的语义召回，不做 knowledge 域）。
+- `options.semanticRecall`（经典消息向量检索/自动注入）：消息向量随该开关写入 `memory_messages_*`；OM 的 `retrieval.vector` 只向量化观测组。视需要在后续切片开启。
 - 主会话 UI、拟人化人格改写（下一独立切片）；OM 管理界面的图形版（本切片只做数据面 + JSON 检视接口）。
 - 多 PC/云执行位、运筹工具补全、调度例程（另片）。
 - 不改 resource=room:<id> 的多用户会话映射（官方模式，已验证）。
 
 ## Tasks
 
-- [ ] T1: D1 OM 存储适配（`src/mastra/om-d1.ts` + `mastra_observational_memory` 表 + 全部生命周期方法 + 能力位） — acceptance: 本地 wrangler dev + 真 DeepSeek 下 `observe({force:true})` 后 D1 出现观测记录；连续观察→触发反射后 `generation_count` 递增、旧记录 `superseded_by` 正确链接（covers: S2.1）
-- [ ] T2: orchestrator 启用 OM（配置阈值/指令/失败策略） — acceptance: 真实房间对话 2–3 轮后（idle/阈值激活）观测文本包含对话事实；下一轮上下文可见观测内容（covers: S2.2, depends: T1）
-- [ ] T3: 主人画像平面（Extractor + `om_profiles` 表 + 上下文注入） — acceptance: 对话中陈述「我叫小王，我喜欢 X」后 `om_profiles` 出现对应用户画像行；同房间后续提问能正确复述画像内容（covers: S2.3, depends: T2）
-- [ ] T4: recall 工具接线（retrieval 含 vector） — acceptance: agent 工具列表含 `recall`；让 agent 回忆「上次说了什么」能经 recall 取回并正确作答；用与原话不同措辞的语义查询也能命中（covers: S2.4, depends: T2, T7）
-- [ ] T5: 检视/导出接口 `/om/profile`、`/om/observations`、`/om/export` — acceptance: 登录用户可取回自己的画像；房间成员可取回该房间观测；非成员 403；导出 JSON 含画像+观测（covers: S2.5, depends: T2, T3）
-- [ ] T6: 生产部署与端到端记忆验证（真 D1 + 真 DeepSeek + 真 Vectorize/Workers AI，无 mock） — acceptance: 部署到 mastra-l1 后跨会话记忆场景通过（先告知偏好→新会话提问能回忆，含语义改述查询），并留存 curl/E2E 证据（covers: S2.1–S2.5, S2.7, depends: T1–T5, T7）
-- [ ] T7: 向量层（VectorizeStore + Workers AI embedder + `om-memory` 索引 + wrangler 绑定） — acceptance: upsert/query/deleteVectors 在生产 Vectorize 真实生效（curl/脚本可见命中）；embedder 对中英文文本返回 1024 维向量（covers: S2.7）
+- [x] T1: D1 OM 存储适配（`src/mastra/om-d1.ts` + `mastra_observational_memory` 表 + 全部生命周期方法 + 能力位） — acceptance: 本地 wrangler dev + 真 DeepSeek 下 `observe({force:true})` 后 D1 出现观测记录；连续观察→触发反射后 `generation_count` 递增、旧记录 `superseded_by` 正确链接（covers: S2.1）
+- [x] T2: orchestrator 启用 OM（配置阈值/指令/失败策略） — acceptance: 真实房间对话 2–3 轮后（idle/阈值激活）观测文本包含对话事实；下一轮上下文可见观测内容（covers: S2.2, depends: T1）
+- [x] T3: 主人画像平面（Extractor + `om_profiles` 表 + 上下文注入） — acceptance: 对话中陈述「我叫小王，我喜欢 X」后 `om_profiles` 出现对应用户画像行；同房间后续提问能正确复述画像内容（covers: S2.3, depends: T2）
+- [x] T4: recall 工具接线（retrieval 含 vector） — acceptance: agent 工具列表含 `recall`；让 agent 回忆「上次说了什么」能经 recall 取回并正确作答；用与原话不同措辞的语义查询也能命中（covers: S2.4, depends: T2, T7）
+- [x] T5: 检视/导出接口 `/om/profile`、`/om/observations`、`/om/export` — acceptance: 登录用户可取回自己的画像；房间成员可取回该房间观测；非成员 403；导出 JSON 含画像+观测（covers: S2.5, depends: T2, T3）
+- [x] T6: 生产部署与端到端记忆验证（真 D1 + 真 DeepSeek + 真 Vectorize/Workers AI，无 mock） — acceptance: 部署到 mastra-l1 后跨会话记忆场景通过（先告知偏好→新会话提问能回忆，含语义改述查询），并留存 curl/E2E 证据（covers: S2.1–S2.5, S2.7, depends: T1–T5, T7）
+- [x] T7: 向量层（VectorizeStore + Workers AI embedder + `om-memory` 索引 + wrangler 绑定） — acceptance: upsert/query/deleteVectors 在生产 Vectorize 真实生效（curl/脚本可见命中）；embedder 对中英文文本返回 1024 维向量（covers: S2.7）
 
 ## Journey log
 
 - 勘察确认：OM 数据面在 `@mastra/memory@1.40.0` 为 `observationalMemory` 选项（Observer/Reflector/Extractor/recall），存储走 `MemoryStorage` 的 OM 扩展面（`supportsObservationalMemory` 等），`@mastra/cloudflare-d1` 无任何实现——与 AGENTS.md「自行扩展到 D1」一致。移植参考为 `@mastra/libsql` 的 `mastra_observational_memory` 实现（约 15 个生命周期方法），core 已导出共享生命周期规则可直接复用。
 - 多用户房间的记忆归属沿用官方 multi-user threads（resource=room:<id> + 消息体内身份）；主人画像因此不走 working memory（会按房间归集），而走 Extractor `onExtracted` → 自有 `om_profiles` 表 + 注入。
 - 语义召回最初列为「留后续」（顾虑 D1 无向量索引）；用户指正：Cloudflare 有 Vectorize + Workers AI 可做 memory recall——改为本切片内做 `MastraVector` 适配（Vectorize）+ bge-m3 嵌入（S2.7/T7），`retrieval: { vector: true }` 全开。
+- OM 后台周期最初用 waitUntil/settled 留在请求里——Workers 响应结束回收 fire-and-forget，观测永不落库；用户指正改用 Cloudflare Queue（S2.8）。Queue consumer 三坑：Queues API 只认 `export default.queue`（具名导出不算）；构建器把 `new Mastra(...)` 改写成惰性工厂（fetch 才实例化），consumer 须自行触发并 `__registerMastra`+`setStorage`；mastra build 只保留 mastra/default 导出，queue 出口经 globalThis 注册表由 worker-entry 转发。
+- 本账号为 Workers 免费版：invocation CPU 预算极小（tail 实测 exceededCpu 于 97ms~2s 不等，API 100328 拒绝 limits 配置），重路径与队列周期随机被杀——**既有约束**（OM 前即有 1102/503 flake），队列 max_retries=10 兜底；升级 Workers Paid 为根治。
+- Vectorize 元数据过滤需要 `create-metadata-index --type string`（thread_id/resource_id），且索引水位线分钟级最终一致——可见性/删除确认要按水位轮询，不能读写即查（探针首版误判「filter 坏了」）。
+- `reflect(threadId, resourceId)` 是位置参数、`observe({threadId,...})` 是对象参数（评审发现误用）；OM rollover 的 retire+insert 须走 D1 `batch()` 事务（防 CPU 中杀留悬空 supersededBy）。

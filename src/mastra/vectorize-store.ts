@@ -260,14 +260,20 @@ export class VectorizeStore extends MastraVector {
       await (idx as any).deleteByFilter(vf);
       return;
     }
-    // 回退：probe 向量 + 过滤查询收集 id 再删。deleteByIds 最终一致，故以「本轮无新 id」为终止条件。
+    // 回退：probe 向量 + 过滤查询收集 id 再删。deleteByIds 最终一致——已提交删除的 id 可能仍被查出，
+    // 不能以「无新 id」为终止条件（topK 会被陈旧 id 占满，漏删后续匹配项）；以「查询归零」为准，空轮次等待生效。
     const dim = (await this.describe(indexName)).dimensions;
     const probe = Array.from({ length: dim }, (_, i) => (i === 0 ? 1 : 0));
     const seen = new Set<string>();
-    for (;;) {
+    for (let round = 0; round < 30; round++) {
       const res = await idx.query(probe, { topK: 100, returnMetadata: 'none', ...(vf ? { filter: vf } : {}) });
-      const fresh = (res.matches ?? []).map((m) => m.id).filter((id) => !seen.has(id));
-      if (fresh.length === 0) break;
+      const matches = res.matches ?? [];
+      if (matches.length === 0) break;
+      const fresh = matches.map((m) => m.id).filter((id) => !seen.has(id));
+      if (fresh.length === 0) {
+        await new Promise((r) => setTimeout(r, 500));
+        continue;
+      }
       for (const id of fresh) seen.add(id);
       await idx.deleteByIds(fresh);
     }

@@ -43,6 +43,8 @@ export interface D1PreparedStatementLike {
 
 export interface D1DatabaseLike {
   prepare(sql: string): D1PreparedStatementLike;
+  /** D1 batch = 事务性多语句；多步生命周期（rollover）必须走它。 */
+  batch?(stmts: D1PreparedStatementLike[]): Promise<Array<{ success: boolean; meta?: { changes?: number }; changes?: number }>>;
 }
 
 /** Canonical head order: newest generation, then earliest createdAt, then lowest id. */
@@ -88,15 +90,19 @@ function bindValue(value: unknown): unknown {
  */
 function normalizeDb(db: D1DatabaseLike): D1DatabaseLike {
   const wrap = (stmt: D1PreparedStatementLike): D1PreparedStatementLike => {
-    const wrapped: D1PreparedStatementLike = {
+    const wrapped: any = {
       bind: (...values: unknown[]) => wrap(stmt.bind(...values.map(bindValue))),
       run: () => stmt.run(),
       first: () => stmt.first(),
       all: () => stmt.all(),
     };
+    wrapped.__raw = stmt;
     return wrapped;
   };
-  return { prepare: (sql: string) => wrap(db.prepare(sql)) };
+  return {
+    prepare: (sql: string) => wrap(db.prepare(sql)),
+    batch: async (stmts: any[]) => db.batch!(stmts.map((s: any) => s?.__raw ?? s)),
+  };
 }
 
 function changesOf(result: { meta?: { changes?: number }; changes?: number }): number {
@@ -303,17 +309,16 @@ async function rollOverObservationalMemory(
     observedTimezone: stored.observedTimezone,
     supersededBy: null,
   };
-  const retired = await db
+  const retireStmt = db
     .prepare(
       `UPDATE "${OM_TABLE}" SET "supersededBy" = ?, "bufferedObservationChunks" = NULL,
        "bufferedReflection" = NULL, "bufferedReflectionTokens" = NULL,
        "bufferedReflectionInputTokens" = NULL, "reflectedObservationLineCount" = NULL, "updatedAt" = ?
        WHERE id = ? AND ${storedRow.guard.sql}`,
     )
-    .bind(id, now.toISOString(), stored.id, ...storedRow.guard.args.map(bindValue))
-    .run();
+    .bind(id, now.toISOString(), stored.id, ...storedRow.guard.args.map(bindValue));
   // Conditional insert: only lands when the retire above actually wrote this id as superseder.
-  await db
+  const insertStmt = db
     .prepare(
       `INSERT INTO "${OM_TABLE}" (
         id, "lookupKey", scope, "resourceId", "threadId",
@@ -356,9 +361,18 @@ async function rollOverObservationalMemory(
       now.toISOString(),
       stored.id,
       id,
-    )
-    .run();
-  return changesOf(retired) === 1 ? record : OM_CAS_CONFLICT;
+    );
+  // retire+insert 必须原子（D1 batch=事务）：否则中途被杀会留下悬空 supersededBy 指向不存在的世代。
+  let retiredChanges: number;
+  if (typeof db.batch === 'function') {
+    const results = await db.batch([retireStmt, insertStmt]);
+    retiredChanges = changesOf(results[0]);
+  } else {
+    const retired = await retireStmt.run();
+    await insertStmt.run();
+    retiredChanges = changesOf(retired);
+  }
+  return retiredChanges === 1 ? record : OM_CAS_CONFLICT;
 }
 
 /** OM method bodies over a raw D1 binding; installed onto a MemoryStorage instance. */
