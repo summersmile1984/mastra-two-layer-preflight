@@ -3,7 +3,7 @@
   "version": "0.2.2",
   "private": true,
   "type": "module",
-  "description": "Mastra Desktop: chat UI (L1 /app) + L2 claim runtime (ACP/CUA) in one Tauri 2 install",
+  "description": "Mastra Desktop: chat UI (L1 /) + L2 claim runtime (ACP/CUA) in one Tauri 2 install",
   "scripts": {
     "ui:dev": "vite",
     "ui:build": "tsc -p tsconfig.ui.json --noEmit && vite build",

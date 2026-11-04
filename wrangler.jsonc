@@ -15,13 +15,13 @@
     {
       "binding": "DB",
       "database_name": "mastra-l1",
-      "database_id": "26a19832-8ff9-4fe4-a253-9305ae02f6bb"
+      "database_id": "067cc9a0-be08-4b16-a527-a29ed4bf31b6"
     }
   ],
   "main": "./.mastra/output/index.mjs",
   "vars": {
     "NODE_ENV": "production",
-    "L1_PUBLIC_URL": "https://mastra-l1.summersmile1984.workers.dev"
+    "L1_PUBLIC_URL": "https://mastra-l1.emdash-ssg-site.workers.dev"
   },
   "alias": {
     "typescript": "./.mastra/output/typescript-stub.mjs",

@@ -24,7 +24,7 @@ export function getAuth(E: AuthEnv) {
   const key = String(E.BETTER_AUTH_SECRET ?? '');
   if (cached && cached.key === key) return cached.auth;
   const db = drizzle(E.DB, { schema });
-  const baseURL = E.BETTER_AUTH_URL || E.L1_PUBLIC_URL || 'https://mastra-l1.summersmile1984.workers.dev';
+  const baseURL = E.BETTER_AUTH_URL || E.L1_PUBLIC_URL || 'https://mastra-l1.emdash-ssg-site.workers.dev';
   const trusted = (E.BETTER_AUTH_TRUSTED_ORIGINS ?? '')
     .split(',')
     .map((s) => s.trim())

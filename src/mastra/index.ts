@@ -40,7 +40,7 @@ import { buildMastraAuth } from '../auth';
 
 const E = env as any;
 const L2_AGENT_ID = 'l2-worker';
-const DEFAULT_PUBLIC = 'https://mastra-l1.summersmile1984.workers.dev';
+const DEFAULT_PUBLIC = 'https://mastra-l1.emdash-ssg-site.workers.dev';
 const publicBase = () => String(E.L1_PUBLIC_URL || DEFAULT_PUBLIC).replace(/\/$/, '');
 const callbackUrl = () => `${publicBase()}/a2a-callback`;
 /** 闹钟语义：唤醒对应房间 RoomDO，推送内容由 DO 读 D1（S2.3）。失败仅记日志不影响主流程。 */
@@ -193,7 +193,7 @@ export const mastra = new Mastra({
     compatibility_date: '2026-10-01',
     compatibility_flags: ['nodejs_compat'],
     vars: { NODE_ENV: 'production', L1_PUBLIC_URL: DEFAULT_PUBLIC },
-    d1_databases: [{ binding: 'DB', database_name: 'mastra-l1', database_id: '26a19832-8ff9-4fe4-a253-9305ae02f6bb' }],
+    d1_databases: [{ binding: 'DB', database_name: 'mastra-l1', database_id: '067cc9a0-be08-4b16-a527-a29ed4bf31b6' }],
   } as any),
   server: {
     auth: buildMastraAuth(E as any) as any,

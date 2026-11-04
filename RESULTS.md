@@ -130,7 +130,7 @@ spawn `dsh --profile acp`，然后依次 initialize → session/new → session/
 - ❌ 完整 Mastra L1（AgentController/UI/SSE/存储）仍未移植到 Workers，Worker 只是占位（回调仅记录到 Cache API，不唤醒会话）。
 
 ## CF Worker P1（2026-11-02）
-- `/` 由 Workers Static Assets 提供（`cf-public/index.html`；CloudflareDeployer 不支持 assets，用 `scripts/cf-postbuild.mjs` 在 build 后给 `.mastra/output/wrangler.json` 补 `assets`）。
+- `/` 由 Workers Static Assets 提供（SPA=`apps/web` 构建产物位于根路径；旧 `cf-public/` 流式 demo 已删除。CloudflareDeployer 不支持 assets，用 `scripts/cf-postbuild.mjs` 在 build 后给 `.mastra/output/wrangler.json` 补 `assets`）。
 - 前端直接调 Mastra 内置 `POST /api/agents/orchestrator/stream`（SSE，`text-delta.payload.text`），`memory:{thread:sid,resource:'web-'+sid}`，记忆在 D1。
 - 实测：「我叫小王，记住」→「好的，小王，记住了。有什么事随时说。」；同 thread「我叫什么？」→「你叫小王。」
 - 未做：L2/A2A、HITL 密码表单、截图（UI 里对应的快捷按钮在 CF 版只会走普通对话）。

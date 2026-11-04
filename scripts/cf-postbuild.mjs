@@ -1,20 +1,17 @@
 // CloudflareDeployer 不支持 assets/DO 配置：build 后给 .mastra/output/wrangler.json 补齐。
 // 未命中静态文件的请求（/rooms/*、/auth/*、/health-l1 等自定义路由）照常进入 Mastra Worker。
-// - cf-public/          → static/        （根路径旧流式 demo，保留）
-// - apps/web/dist/      → static/app/    （现行 SPA，登录 + 房间 + 聊天）
+// - apps/web/dist/      → static/        （SPA：登录 + 房间 + 聊天，根路径唯一入口）
 // - room-do.js          → worker-entry.mjs 重导出 RoomDO（mastra 入口只导出 default { fetch }，
 //                          DO 类穿不过；wrangler DO 绑定要求类从 main 模块导出，见 spec S2.8.1）
 import { cpSync, readFileSync, writeFileSync, rmSync, existsSync, mkdirSync, copyFileSync } from 'node:fs';
 const out = '.mastra/output';
 rmSync(`${out}/static`, { recursive: true, force: true });
-cpSync('cf-public', `${out}/static`, { recursive: true });
 
-// SPA（apps/web 构建产物，base=/app/）
+// SPA（apps/web 构建产物，base=/）
 const webDist = 'apps/web/dist';
 if (existsSync(`${webDist}/index.html`)) {
-  mkdirSync(`${out}/static/app`, { recursive: true });
-  cpSync(webDist, `${out}/static/app`, { recursive: true });
-  console.log('[cf-postbuild] SPA apps/web/dist -> ./static/app');
+  cpSync(webDist, `${out}/static`, { recursive: true });
+  console.log('[cf-postbuild] SPA apps/web/dist -> ./static (root)');
 } else {
   console.log('[cf-postbuild] WARN: apps/web/dist 未找到，跳过 SPA（先跑 npm run web:build）');
 }
@@ -35,7 +32,7 @@ console.log('[cf-postbuild] RoomDO -> worker-entry.mjs');
 
 const f = `${out}/wrangler.json`;
 const w = JSON.parse(readFileSync(f, 'utf8'));
-// html_handling:auto-trailing-slash 让 /app 命中 app/index.html；SPA 无服务端兜底路由，not_found 交 Worker
+// html_handling:auto-trailing-slash 让 / 命中 index.html；SPA 无服务端兜底路由，not_found 交 Worker
 w.assets = { directory: './static', html_handling: 'auto-trailing-slash', not_found_handling: 'none' };
 // main 重指 worker-entry（重导出 RoomDO 供 DO 绑定）
 w.main = './worker-entry.mjs';
