@@ -1,6 +1,6 @@
 ---
 feature: ws-hibernation-push
-status: in-progress
+status: delivered
 updated: 2026-11-04
 source: ws-hibernation-push
 ---
@@ -8,6 +8,10 @@ source: ws-hibernation-push
 # WebSocket Hibernation 实时推送
 
 ## Report
+
+**What was built** — 房间聊天实时推送：每房间一个 RoomDO（WebSocket Hibernation API，连接随实例休眠不计 duration），写库后「闹钟」唤醒、内容读 D1 广播 message/busy 事件；WS 升级鉴权+成员校验；L2 后台结果落 messages 表（compose 失败降级用原始 result）；前端 WS 通道（25s 心跳、指数退避重连）+ 轮询降级（健康 15s 兜底 / 断开 4s）；AGENTS.md 记录 DO 例外与 Hibernation 约束。附带修复：better-auth 读路径 disableRefresh（并发 401 竞态）、新成员发言归属刷新、routes 迁出 /api 保留区。
+
+**Verification** — t7-auth-e2e 9/9、t7-rooms-e2e 14/14、t7-mastra-auth-lock 6/6（共 29 项回归）；24 并发 GET /rooms/:id 全 200（真实 cookie）；wrangler dev 双浏览器会话 E2E：跨用户 WS 推送 <1s、真实 DeepSeek 回复、busy 开/关实时达、切房间无重复、陈旧成员列表归属正确；SSE/WS 101 穿 Mastra 分发层实测通过；wrangler 24 并发压力全绿。
 
 ## [S1] Problem
 房间聊天当前靠前端 4 秒轮询 `GET /api/rooms/:id/messages` 同步消息与忙状态。多人同房时对方发言最迟 4 秒才可见，实时感差；空转轮询持续消耗 D1 读与请求额度。需要服务端主动推送（消息 + 忙状态），断线时仍能降级回轮询。

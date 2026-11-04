@@ -4,7 +4,7 @@
  * - 归属：rooms + room_members；/api/rooms/* 全部校验成员身份
  * - 聊天：POST /api/rooms/:id/messages 直接调 orchestrator.stream（memory: thread=room.id）
  *   返回 SSE 文本增量，流结束后把 assistant 消息写回 messages（房间内所有成员可见）
- * - 同步：GET /api/rooms/:id/messages?after= 轮询，返回 {messages, busy}
+ * - 同步：GET /rooms/:id/messages?after= 轮询，返回 {messages, busy}
  */
 import { requireSession, AuthError, getAuth, type AuthEnv } from '../auth';
 
