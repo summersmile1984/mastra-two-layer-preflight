@@ -15,7 +15,7 @@ export type ChatRunner = {
   stream: (messages: any[], opts: any) => Promise<{ textStream: ReadableStream<string> }>;
 };
 
-export type RoomDeps = { E: RoomEnv; chat: ChatRunner };
+export type RoomDeps = { E: RoomEnv; chat: ChatRunner; notifyRoom?: (roomId: string, evt: { kind: 'message' | 'busy'; messageId?: string }) => Promise<void> };
 
 const now = () => Date.now();
 const rid = (p: string) => `${p}-${crypto.randomUUID()}`;
@@ -170,7 +170,7 @@ async function listMessages(c: any, E: RoomEnv) {
 }
 
 // 发消息 + 流式回复
-async function sendMessage(c: any, E: RoomEnv, chat: ChatRunner) {
+async function sendMessage(c: any, E: RoomEnv, chat: ChatRunner, notifyRoom?: RoomDeps['notifyRoom']) {
   const user = await requireSession(c.req.raw ?? { headers: c.req.headers }, E);
   const roomId = c.req.param('id');
   const m = await isMember(E.DB, roomId, user.id);
@@ -186,6 +186,7 @@ async function sendMessage(c: any, E: RoomEnv, chat: ChatRunner) {
     .run();
   await E.DB.prepare('UPDATE rooms SET updated_at=? WHERE id=?').bind(now(), roomId).run();
   await touchRead(E.DB, roomId, user.id);
+  try { await notifyRoom?.(roomId, { kind: 'message', messageId: userMsgId }); } catch {}
 
   // L1 上下文带发言者名（共享房间里“帮我看下”要知道是谁）
   const who = user.name || user.email || '用户';
@@ -196,11 +197,13 @@ async function sendMessage(c: any, E: RoomEnv, chat: ChatRunner) {
 
   const persistAssistant = async (full: string) => {
     const content = full.trim() || '（空回复）';
+    const asstId = rid('msg');
     await E.DB.prepare('INSERT INTO messages (id,room_id,user_id,role,content,created_at) VALUES (?,?,?,?,?,?)')
-      .bind(rid('msg'), roomId, null, 'assistant', content, now())
+      .bind(asstId, roomId, null, 'assistant', content, now())
       .run();
     await E.DB.prepare('UPDATE rooms SET updated_at=? WHERE id=?').bind(now(), roomId).run();
     await touchRead(E.DB, roomId, user.id);
+    try { await notifyRoom?.(roomId, { kind: 'message', messageId: asstId }); } catch {}
   };
 
   return sseResponse(sseFromStream(out.textStream, persistAssistant));
@@ -208,9 +211,21 @@ async function sendMessage(c: any, E: RoomEnv, chat: ChatRunner) {
 
 // ---------- 路由表 ----------
 
+/** WS 升级：鉴权 + 成员校验后转 RoomDO（S2.2 / T2）。无会话 401、非成员 403、未绑 DO 503。 */
+async function upgradeWs(c: any, E: RoomEnv): Promise<Response> {
+  const user = await requireSession(c.req.raw ?? { headers: c.req.headers }, E);
+  const roomId = c.req.param('id');
+  const m = await isMember(E.DB, roomId, user.id);
+  if (!m.ok) throw new AuthError(403, 'not a member');
+  const stub = (E as any).ROOM_DO?.getByName?.(roomId);
+  if (!stub) throw new AuthError(503, 'realtime not available');
+  // 升级请求（含 Upgrade 头）原样转给 DO，由 DO acceptWebSocket 接管
+  return stub.fetch(c.req.raw ?? new Request(`http://do/${roomId}/ws`));
+}
+
 /** 生成 rooms/messages 的 registerApiRoute 描述数组（不含 auth catch-all）。 */
 export function roomHandlers(deps: RoomDeps) {
-  const { E, chat } = deps;
+  const { E, chat, notifyRoom } = deps;
   // 把处理器包一层：抛 AuthError/其它错误时转成 HTTP 响应，避免裸抛
   const wrap = (fn: (c: any) => Promise<Response>) => async (c: any) => {
     try {
@@ -220,15 +235,16 @@ export function roomHandlers(deps: RoomDeps) {
     }
   };
   return [
-    { path: '/api/rooms', method: 'GET' as const, requiresAuth: false, handler: wrap((c) => listRooms(c, E)) },
-    { path: '/api/rooms', method: 'POST' as const, requiresAuth: false, handler: wrap((c) => createRoom(c, E)) },
-    { path: '/api/rooms/:id', method: 'GET' as const, requiresAuth: false, handler: wrap((c) => getRoom(c, E)) },
-    { path: '/api/rooms/:id/members', method: 'POST' as const, requiresAuth: false, handler: wrap((c) => addMember(c, E)) },
-    { path: '/api/rooms/:id/messages', method: 'GET' as const, requiresAuth: false, handler: wrap((c) => listMessages(c, E)) },
-    { path: '/api/rooms/:id/messages', method: 'POST' as const, requiresAuth: false, handler: wrap((c) => sendMessage(c, E, chat)) },
+    { path: '/rooms', method: 'GET' as const, requiresAuth: false, handler: wrap((c) => listRooms(c, E)) },
+    { path: '/rooms', method: 'POST' as const, requiresAuth: false, handler: wrap((c) => createRoom(c, E)) },
+    { path: '/rooms/:id', method: 'GET' as const, requiresAuth: false, handler: wrap((c) => getRoom(c, E)) },
+    { path: '/rooms/:id/members', method: 'POST' as const, requiresAuth: false, handler: wrap((c) => addMember(c, E)) },
+    { path: '/rooms/:id/messages', method: 'GET' as const, requiresAuth: false, handler: wrap((c) => listMessages(c, E)) },
+    { path: '/rooms/:id/messages', method: 'POST' as const, requiresAuth: false, handler: wrap((c) => sendMessage(c, E, chat, notifyRoom)) },
+    { path: '/rooms/:id/ws', method: 'GET' as const, requiresAuth: false, handler: wrap((c) => upgradeWs(c, E)) },
     // better-auth catch-all
     {
-      path: '/api/auth/*',
+      path: '/auth/*',
       method: 'ALL' as const,
       requiresAuth: false,
       handler: async (c: any) => {

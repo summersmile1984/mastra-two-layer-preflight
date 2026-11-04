@@ -43,7 +43,7 @@ const jsonInit = (method: string, body?: unknown): RequestInit => ({
 
 export async function getSession(): Promise<User | null> {
   try {
-    const r = await fetch('/api/auth/get-session', { credentials: 'same-origin' });
+    const r = await fetch('/auth/get-session', { credentials: 'same-origin' });
     if (!r.ok) return null;
     const s = await r.json();
     return s?.user?.id ? (s.user as User) : null;
@@ -53,46 +53,46 @@ export async function getSession(): Promise<User | null> {
 }
 
 export async function signIn(email: string, password: string): Promise<User> {
-  const r = await fetch('/api/auth/sign-in/email', jsonInit('POST', { email, password }));
+  const r = await fetch('/auth/sign-in/email', jsonInit('POST', { email, password }));
   const s = await j<{ user: User }>(r);
   return s.user;
 }
 
 export async function signUp(name: string, email: string, password: string): Promise<User> {
-  const r = await fetch('/api/auth/sign-up/email', jsonInit('POST', { name, email, password }));
+  const r = await fetch('/auth/sign-up/email', jsonInit('POST', { name, email, password }));
   const s = await j<{ user: User }>(r);
   return s.user;
 }
 
 export async function signOut(): Promise<void> {
-  await fetch('/api/auth/sign-out', jsonInit('POST')).catch(() => {});
+  await fetch('/auth/sign-out', jsonInit('POST')).catch(() => {});
 }
 
 // ---------- rooms ----------
 
 export async function listRooms(): Promise<Room[]> {
-  const r = await fetch('/api/rooms', { credentials: 'same-origin' });
+  const r = await fetch('/rooms', { credentials: 'same-origin' });
   return (await j<{ rooms: Room[] }>(r)).rooms;
 }
 
 export async function createRoom(name: string): Promise<Room> {
-  const r = await fetch('/api/rooms', jsonInit('POST', { name }));
+  const r = await fetch('/rooms', jsonInit('POST', { name }));
   return (await j<{ room: Room }>(r)).room;
 }
 
 export async function getRoom(id: string): Promise<{ room: Room; members: Member[] }> {
-  const r = await fetch(`/api/rooms/${id}`, { credentials: 'same-origin' });
+  const r = await fetch(`/rooms/${id}`, { credentials: 'same-origin' });
   return j(r);
 }
 
 export async function addMember(roomId: string, email: string): Promise<void> {
-  const r = await fetch(`/api/rooms/${roomId}/members`, jsonInit('POST', { email }));
+  const r = await fetch(`/rooms/${roomId}/members`, jsonInit('POST', { email }));
   await j(r);
 }
 
 export async function listMessages(roomId: string, after?: string): Promise<{ messages: Message[]; busy: boolean }> {
   const q = after ? `?after=${encodeURIComponent(after)}` : '';
-  const r = await fetch(`/api/rooms/${roomId}/messages${q}`, { credentials: 'same-origin' });
+  const r = await fetch(`/rooms/${roomId}/messages${q}`, { credentials: 'same-origin' });
   return j(r);
 }
 
@@ -106,7 +106,7 @@ export type SseHandlers = {
 
 /** POST 发消息并消费 SSE 流（自定义事件：delta / done）。 */
 export async function sendMessage(roomId: string, text: string, h: SseHandlers): Promise<void> {
-  const r = await fetch(`/api/rooms/${roomId}/messages`, {
+  const r = await fetch(`/rooms/${roomId}/messages`, {
     ...jsonInit('POST', { text }),
     headers: { accept: 'text/event-stream', 'content-type': 'application/json' },
   });

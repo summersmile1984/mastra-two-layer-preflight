@@ -61,8 +61,93 @@ export function Chat({
   const [inviteMsg, setInviteMsg] = useState('');
   const endRef = useRef<HTMLDivElement>(null);
   const lastIdRef = useRef<string>('');
+  const wsHealthyRef = useRef(false);
+  const wsRef = useRef<WebSocket | null>(null);
+  const membersRef = useRef<Member[]>(members);
+  membersRef.current = members;
 
-  // 加载 + 轮询
+  // 合并服务端权威消息（含乐观副本去重），WS 推送与轮询共用（S2.4）
+  const mergeMessages = (fresh: Message[]) => {
+    if (!fresh.length) return;
+    // 新成员在进房后才发言时，旧成员列表查不到发送者（归属退化成「成员」）——发现未知发送者即刷新名单
+    const hasUnknown = fresh.some(
+      (m) => m.role === 'user' && m.user_id && m.user_id !== me.id && !membersRef.current.some((x) => x.user_id === m.user_id),
+    );
+    if (hasUnknown) onMembersChanged();
+    lastIdRef.current = fresh[fresh.length - 1].id;
+    setMessages((prev) => {
+      const freshIds = new Set(fresh.map((x) => x.id));
+      const kept = prev.filter((x) => !freshIds.has(x.id));
+      for (const s of fresh) {
+        const idx = kept.findIndex(
+          (x) => (x.id.startsWith('local-') || x.id.startsWith('a-')) && x.role === s.role && x.content === s.content,
+        );
+        if (idx >= 0) kept.splice(idx, 1);
+      }
+      return [...kept, ...fresh];
+    });
+  };
+
+  // WS 通道（S2.2/S2.4）：message/busy 事件实时推送，心跳 25s；指数退避重连
+  useEffect(() => {
+    let stop = false;
+    let ws: WebSocket | null = null;
+    let hb: number | undefined;
+    let retry: number | undefined;
+    let attempt = 0;
+
+    const connect = () => {
+      if (stop) return;
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${proto}//${location.host}/rooms/${roomId}/ws`);
+      wsRef.current = ws;
+      ws.onopen = () => {
+        wsHealthyRef.current = true;
+        attempt = 0;
+        hb = window.setInterval(() => {
+          try {
+            ws?.send(JSON.stringify({ type: 'ping' }));
+          } catch {}
+        }, 25000);
+      };
+      ws.onmessage = (e) => {
+        try {
+          const ev = JSON.parse(e.data);
+          if (ev.type === 'message' && ev.message) mergeMessages([ev.message]);
+          else if (ev.type === 'busy') setBusy(!!ev.busy);
+          // pong / 其它帧视为存活（已由 onmessage 证明连接健康）
+        } catch {}
+      };
+      ws.onclose = () => {
+        wsHealthyRef.current = false;
+        if (hb) window.clearInterval(hb);
+        if (stop) return;
+        // 指数退避：1s 起，封顶 30s（S2.4）
+        attempt += 1;
+        const delay = Math.min(30000, 1000 * 2 ** (attempt - 1));
+        retry = window.setTimeout(connect, delay);
+      };
+      ws.onerror = () => {
+        try {
+          ws?.close();
+        } catch {}
+      };
+    };
+
+    connect();
+    return () => {
+      stop = true;
+      if (hb) window.clearInterval(hb);
+      if (retry) window.clearTimeout(retry);
+      wsHealthyRef.current = false;
+      try {
+        ws?.close();
+      } catch {}
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomId]);
+
+  // 加载 + 轮询（降级梯度：WS 健康 15s 安全网，断开 4s 兜底）（S2.4）
   useEffect(() => {
     let stop = false;
     let timer: number | undefined;
@@ -70,24 +155,10 @@ export function Chat({
       try {
         const { messages: fresh, busy: b } = await listMessages(roomId, lastIdRef.current || undefined);
         if (stop) return;
-        if (fresh.length) {
-          lastIdRef.current = fresh[fresh.length - 1].id;
-          setMessages((prev) => {
-            const freshIds = new Set(fresh.map((x) => x.id));
-            // 先移除已被服务端确认的乐观副本（临时 id 且角色+内容一致），再追加服务端权威消息
-            const kept = prev.filter((x) => !freshIds.has(x.id));
-            for (const s of fresh) {
-              const idx = kept.findIndex(
-                (x) => (x.id.startsWith('local-') || x.id.startsWith('a-')) && x.role === s.role && x.content === s.content,
-              );
-              if (idx >= 0) kept.splice(idx, 1);
-            }
-            return [...kept, ...fresh];
-          });
-        }
+        mergeMessages(fresh);
         setBusy(b);
       } catch {}
-      if (!stop) timer = window.setTimeout(poll, 4000);
+      if (!stop) timer = window.setTimeout(poll, wsHealthyRef.current ? 15000 : 4000);
     }
     setMessages([]);
     lastIdRef.current = '';
@@ -96,6 +167,7 @@ export function Chat({
       stop = true;
       if (timer) window.clearTimeout(timer);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomId]);
 
   useEffect(() => {

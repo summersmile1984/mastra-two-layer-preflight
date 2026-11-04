@@ -34,6 +34,7 @@ export function getAuth(E: AuthEnv) {
     emailAndPassword: { enabled: true, minPasswordLength: 8 },
     secret: E.BETTER_AUTH_SECRET,
     baseURL,
+    basePath: '/auth', // Mastra 保留 /api/* 给内置路由，自定义路由挂 /auth/*
     // 跨源 SPA（本地 dev：vite 5173 → API 8787）需要 trustedOrigins；同源生产可不配
     ...(trusted.length ? { trustedOrigins: trusted } : {}),
     // http（本地 dev）下 __Secure- 前缀 cookie 会被浏览器拒收，仅 https 强制 secure
@@ -68,7 +69,9 @@ export async function getSessionUser(req: Request | { headers?: any; header?: (n
   }
   try {
     const auth = getAuth(E);
-    const s: any = await (auth.api as any).getSession({ headers });
+    // disableRefresh：读路径不走会话滚动续期（updateSession 写），否则并发读会竞态
+    // 抛 FAILED_TO_GET_SESSION（401）——实测 8 并发 6 失败；读接口无需续期
+    const s: any = await (auth.api as any).getSession({ headers, query: { disableRefresh: true } });
     if (s?.user?.id) return { id: String(s.user.id), email: String(s.user.email ?? ''), name: s.user.name ? String(s.user.name) : undefined };
     return null;
   } catch (e: any) {

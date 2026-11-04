@@ -35,6 +35,7 @@ import { Memory } from '@mastra/memory';
 import { z } from 'zod';
 import { pollL2Task } from '../l1/poll-l2';
 import { roomHandlers } from '../l1/rooms';
+import { probeRoutes } from './probe-routes';
 import { buildMastraAuth } from '../auth';
 
 const E = env as any;
@@ -42,6 +43,18 @@ const L2_AGENT_ID = 'l2-worker';
 const DEFAULT_PUBLIC = 'https://mastra-l1.summersmile1984.workers.dev';
 const publicBase = () => String(E.L1_PUBLIC_URL || DEFAULT_PUBLIC).replace(/\/$/, '');
 const callbackUrl = () => `${publicBase()}/a2a-callback`;
+/** 闹钟语义：唤醒对应房间 RoomDO，推送内容由 DO 读 D1（S2.3）。失败仅记日志不影响主流程。 */
+const notifyRoom = async (roomId: string, evt: { kind: 'message' | 'busy'; messageId?: string }) => {
+  try {
+    const stub = (E as any).ROOM_DO?.getByName?.(roomId);
+    if (!stub) return;
+    await stub.fetch(new Request('http://do/notify', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(evt),
+    }));
+  } catch (e: any) {
+    console.log('[L1] notifyRoom failed', String(e?.message ?? e).slice(0, 120));
+  }
+};
 const normL2 = (u: string) => { u = u.replace(/\/$/, ''); return /\/api\/a2a\//.test(u) ? u : `${u}/api/a2a/${L2_AGENT_ID}`; };
 
 // ---------- D1 任务登记 ----------
@@ -81,6 +94,7 @@ const dispatch_to_sandbox = createTool({
       await d.prepare('INSERT INTO l2_tasks (task_id,thread_id,resource_id,runtime,state,prompt,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)')
         .bind(taskId, threadId, resourceId ?? null, runtime, 'queued', text, now, now).run();
       console.log('[L1] queued', JSON.stringify({ taskId, threadId, runtime }));
+      try { await notifyRoom(threadId, { kind: 'busy' }); } catch {}
       if (E.L2_A2A_URL) {
         try {
           const r = await fetch(normL2(String(E.L2_A2A_URL)), {
@@ -147,12 +161,24 @@ const finalizeTask = async (taskId: string, state: string, text: string, src: st
     .bind(state, text.slice(0, 20000), Date.now(), taskId).run();
   if (!TERMINAL.includes(state) || !u?.meta?.changes) return {};
   const compose = (async () => {
+    let reply = '';
     try {
       const res: any = await orchestrator.generate(
         `<sandbox-result state="${state}">${text.slice(0, 8000)}</sandbox-result>\n（这是后台任务的结果通知，不是用户消息；请直接向用户简要汇报）`,
         { memory: { thread: rec.thread_id, resource: rec.resource_id ?? rec.thread_id }, maxSteps: 1 } as any);
-      await d.prepare('UPDATE l2_tasks SET reply=?, updated_at=? WHERE task_id=?').bind(String(res?.text ?? '').slice(0, 8000), Date.now(), taskId).run();
+      reply = String(res?.text ?? '').slice(0, 8000);
+      await d.prepare('UPDATE l2_tasks SET reply=?, updated_at=? WHERE task_id=?').bind(reply, Date.now(), taskId).run();
     } catch (e: any) { console.log('[L1] compose failed', String(e?.message ?? e).slice(0, 200)); }
+    // S2.5：后台结果落成房间 assistant 消息（room_id = thread_id）——compose 失败也要落（降级用原始 result）
+    try {
+      const content = reply || (state === 'completed' ? `处理好了：${text.slice(0, 2000)}` : '这次后台处理没成功，请稍后再试。');
+      const msgId = `msg-${crypto.randomUUID()}`;
+      await d.prepare('INSERT INTO messages (id,room_id,user_id,role,content,created_at) VALUES (?,?,?,?,?,?)')
+        .bind(msgId, rec.thread_id, null, 'assistant', content, Date.now()).run();
+      await d.prepare('UPDATE rooms SET updated_at=? WHERE id=?').bind(Date.now(), rec.thread_id).run();
+      try { await notifyRoom(rec.thread_id, { kind: 'message', messageId: msgId }); } catch {}
+    } catch (e: any) { console.log('[L1] result->messages failed', String(e?.message ?? e).slice(0, 160)); }
+    try { await notifyRoom(rec.thread_id, { kind: 'busy' }); } catch {}
   })();
   return { compose };
 };
@@ -172,6 +198,7 @@ export const mastra = new Mastra({
   server: {
     auth: buildMastraAuth(E as any) as any,
     apiRoutes: [
+      ...(E.PROBE_ROUTES === '1' ? probeRoutes() : []),
       registerApiRoute('/health-l1', {
         method: 'GET',
         requiresAuth: false,
@@ -235,6 +262,8 @@ export const mastra = new Mastra({
             return { textStream: (out as any).textStream as ReadableStream<string> };
           },
         },
+        // 闹钟语义：唤醒对应房间的 RoomDO，推送内容由 DO 读 D1（S2.3）
+        notifyRoom,
       }).map((h) => registerApiRoute(h.path as any, { method: h.method, requiresAuth: h.requiresAuth, handler: h.handler } as any)),
     ],
   },
