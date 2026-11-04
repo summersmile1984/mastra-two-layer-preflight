@@ -1,6 +1,6 @@
 ---
 feature: observational-memory
-status: designed
+status: in-progress
 updated: 2026-11-04
 source: observational-memory
 ---

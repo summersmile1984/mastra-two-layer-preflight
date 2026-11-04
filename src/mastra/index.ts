@@ -31,12 +31,16 @@ import { createTool } from '@mastra/core/tools';
 import { registerApiRoute } from '@mastra/core/server';
 import { CloudflareDeployer } from '@mastra/deployer-cloudflare';
 import { D1Store } from '@mastra/cloudflare-d1';
-import { Memory } from '@mastra/memory';
+import { Memory, Extractor } from '@mastra/memory';
 import { z } from 'zod';
 import { pollL2Task } from '../l1/poll-l2';
 import { roomHandlers } from '../l1/rooms';
 import { probeRoutes } from './probe-routes';
-import { buildMastraAuth } from '../auth';
+import { buildMastraAuth, getSessionUser } from '../auth';
+import { ensureOmTable, installD1OmSupport } from './om-d1';
+import { VectorizeStore } from './vectorize-store';
+import { createWorkersAiEmbedder } from './workers-ai-embedder';
+import { ensureProfileTable, upsertProfile, resolveUserByName, loadRoomProfileBlock } from './profile';
 
 const E = env as any;
 const L2_AGENT_ID = 'l2-worker';
@@ -66,7 +70,9 @@ function db() {
     result TEXT, reply TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, delivered INTEGER NOT NULL DEFAULT 0)`).run()
     .then(() => d.prepare('CREATE INDEX IF NOT EXISTS l2_tasks_thread ON l2_tasks(thread_id, updated_at)').run())
     .then(() => d.prepare('ALTER TABLE l2_tasks ADD COLUMN prompt TEXT').run().catch(() => null))
-    .then(() => d.prepare('CREATE INDEX IF NOT EXISTS l2_tasks_state ON l2_tasks(state, created_at)').run());
+    .then(() => d.prepare('CREATE INDEX IF NOT EXISTS l2_tasks_state ON l2_tasks(state, created_at)').run())
+    .then(() => ensureOmTable(d))
+    .then(() => ensureProfileTable(d));
   return { d, ready: schemaReady };
 }
 
@@ -121,14 +127,86 @@ const dispatch_to_sandbox = createTool({
   },
 });
 
+// D1 存储单例：Mastra 与 Memory 共用；OM 扩展面装饰到 memory domain（observational-memory S2.1）。
+// 构建期（mastra build）没有运行时 env，store domain 初始化会抛——惰性安装，运行时冷启动即生效。
+const store = new D1Store({ id: 'l1-d1', binding: E.DB });
+let omInstalled = false;
+const ensureOmInstalled = () => {
+  if (omInstalled) return;
+  try {
+    installD1OmSupport((store as any).stores?.memory, E.DB);
+    omInstalled = true;
+  } catch (e: any) {
+    console.log('[OM] install deferred', String(e?.message ?? e).slice(0, 120));
+  }
+};
+ensureOmInstalled();
+const vectorStore = new VectorizeStore({ index: E.VECTORIZE, observationsIndex: E.VECTORIZE_OBS });
+
+// 主人画像抽取（S2.3）：从【名字】发言归集稳定信息到 om_profiles（多用户共享 thread 时 working memory 装不下主人画像）
+const userProfileExtractor = new Extractor({
+  name: 'User profile',
+  instructions: '从带【名字】前缀的发言中抽取每位发言者的稳定信息（称呼/时区/偏好/在做的事/事实）。只记稳定信息，不记一次性寒暄；每个条目的 speaker 填【名字】里的名字。',
+  schema: z.object({
+    people: z.array(z.object({
+      speaker: z.string(),
+      name: z.string().optional(),
+      preferredName: z.string().optional(),
+      timezone: z.string().optional(),
+      preferences: z.array(z.string()).optional(),
+      ongoing: z.array(z.string()).optional(),
+      facts: z.array(z.string()).optional(),
+    })),
+  }),
+  onExtracted: async ({ current }: any) => {
+    for (const p of current?.people ?? []) {
+      try {
+        const u = await resolveUserByName(E.DB, String(p?.speaker ?? ''));
+        if (!u) continue;
+        await upsertProfile(E.DB, {
+          userId: u.id, email: u.email, name: u.name,
+          payload: { name: p.name, preferredName: p.preferredName, timezone: p.timezone, preferences: p.preferences, ongoing: p.ongoing, facts: p.facts },
+        });
+      } catch (e: any) {
+        console.log('[OM] profile upsert failed', String(e?.message ?? e).slice(0, 120));
+      }
+    }
+    return current;
+  },
+});
+
 const orchestrator = new Agent({
   id: 'orchestrator',
   name: 'orchestrator',
   instructions: INSTRUCTIONS,
   model: 'deepseek/deepseek-chat',
   tools: { dispatch_to_sandbox },
-  // 会话记忆：使用 Mastra 实例的 D1Store；thread = 前端 sid
-  memory: new Memory({ options: { lastMessages: 20 } }),
+  // 会话记忆：D1 + OM（Observer/Reflector 观测日志）+ Vectorize 语义召回；thread = roomId。
+  // 不显式传 storage（构建期无 env 会炸 D1Store 初始化）；Memory 经 Mastra 注册拿到同一个 store。
+  memory: new Memory({
+    vector: vectorStore,
+    embedder: createWorkersAiEmbedder(E.AI),
+    options: {
+      lastMessages: 20,
+      observationalMemory: {
+        model: 'deepseek/deepseek-chat',
+        retrieval: { vector: true },
+        observation: {
+          messageTokens: 2_000,
+          bufferOnIdle: true,
+          activateAfterIdle: 300_000,
+          failurePolicy: 'continue',
+          instruction: '你是秘书的记忆观察员。重点记录发言者的身份/称呼、偏好、决定、承诺与待办、在做的事、重要事实；忽略寒暄。',
+          extract: [userProfileExtractor],
+        },
+        reflection: {
+          observationTokens: 8_000,
+          failurePolicy: 'continue',
+          instruction: '压缩合并时优先保留主人的身份/称呼/偏好/决定/待办/事实，丢弃寒暄与重复。',
+        },
+      },
+    },
+  }),
 });
 
 const tokenOk = (got?: string | null) => {
@@ -187,7 +265,7 @@ const pollL2 = (id: string) => pollL2Task(id, { url: () => normL2(String(E.L2_A2
 
 export const mastra = new Mastra({
   agents: { orchestrator },
-  storage: new D1Store({ id: 'l1-d1', binding: E.DB }),
+  storage: store,
   deployer: new CloudflareDeployer({
     name: 'mastra-l1',
     compatibility_date: '2026-10-01',
@@ -206,6 +284,55 @@ export const mastra = new Mastra({
           let queued: number | null = null;
           try { const { d, ready } = db(); await ready; queued = ((await d.prepare("SELECT COUNT(*) n FROM l2_tasks WHERE state='queued'").first()) as any)?.n ?? 0; } catch {}
           return c.json({ ok: true, role: 'l1-mastra-cf', pullMode: true, claim: `${publicBase()}/l2-claim`, queued, l2Configured: !!E.L2_A2A_URL, pushToken: !!E.PUSH_TOKEN, callback: callbackUrl() });
+        },
+      } as any),
+      // OM 记忆检视（S2.5）：自己的画像、所在房间的观测日志、全量导出
+      registerApiRoute('/om/profile', {
+        method: 'GET',
+        requiresAuth: false,
+        handler: async (c: any) => {
+          const u = await getSessionUser(c.req.raw ?? { headers: c.req.headers }, E as any);
+          if (!u) return c.json({ error: 'unauthorized' }, 401);
+          const row: any = await E.DB.prepare('SELECT payload, updated_at FROM om_profiles WHERE user_id=?').bind(u.id).first();
+          let payload: any = null;
+          try { payload = row ? JSON.parse(String(row.payload)) : null; } catch {}
+          return c.json({ user: { id: u.id, name: u.name, email: u.email }, profile: payload, updatedAt: row?.updated_at ?? null });
+        },
+      } as any),
+      registerApiRoute('/om/observations', {
+        method: 'GET',
+        requiresAuth: false,
+        handler: async (c: any) => {
+          const u = await getSessionUser(c.req.raw ?? { headers: c.req.headers }, E as any);
+          if (!u) return c.json({ error: 'unauthorized' }, 401);
+          const thread = String(c.req.query('thread') ?? '');
+          if (!/^[\w-]{3,64}$/.test(thread)) return c.json({ error: 'bad thread' }, 400);
+          const m = await E.DB.prepare('SELECT 1 AS x FROM room_members WHERE room_id=? AND user_id=?').bind(thread, u.id).first();
+          if (!m) return c.json({ error: 'not a member' }, 403);
+          const { results } = await E.DB.prepare(
+            'SELECT id, generationCount, activeObservations, bufferedObservationChunks, bufferedReflection, originType, createdAt, updatedAt, supersededBy FROM mastra_observational_memory WHERE threadId=? ORDER BY generationCount DESC, createdAt ASC, id ASC',
+          ).bind(thread).all();
+          return c.json({ thread, records: results ?? [] });
+        },
+      } as any),
+      registerApiRoute('/om/export', {
+        method: 'GET',
+        requiresAuth: false,
+        handler: async (c: any) => {
+          const u = await getSessionUser(c.req.raw ?? { headers: c.req.headers }, E as any);
+          if (!u) return c.json({ error: 'unauthorized' }, 401);
+          const prow: any = await E.DB.prepare('SELECT payload, updated_at FROM om_profiles WHERE user_id=?').bind(u.id).first();
+          let payload: any = null;
+          try { payload = prow ? JSON.parse(String(prow.payload)) : null; } catch {}
+          const { results: rooms } = await E.DB.prepare('SELECT room_id FROM room_members WHERE user_id=?').bind(u.id).all();
+          const observations: any[] = [];
+          for (const r of rooms ?? []) {
+            const { results } = await E.DB.prepare(
+              'SELECT threadId, generationCount, activeObservations, createdAt, supersededBy FROM mastra_observational_memory WHERE threadId=? ORDER BY generationCount DESC',
+            ).bind((r as any).room_id).all();
+            observations.push({ thread: (r as any).room_id, records: results ?? [] });
+          }
+          return c.json({ exportedAt: Date.now(), user: { id: u.id, name: u.name, email: u.email }, profile: payload, observations });
         },
       } as any),
       // L2 出站 PULL：原子领取一个 queued 任务 → working
@@ -258,7 +385,19 @@ export const mastra = new Mastra({
         E: E as any,
         chat: {
           stream: async (messages, opts) => {
-            const out = await orchestrator.stream(messages as any, opts as any);
+            ensureOmInstalled();
+            // 注入成员画像（S2.3）：让回复自然体现「记得主人」
+            let msgs: any[] = messages as any[];
+            try {
+              const threadId = String((opts as any)?.memory?.thread ?? '');
+              if (threadId) {
+                const block = await loadRoomProfileBlock(E.DB, threadId);
+                if (block) msgs = [{ role: 'system', content: block }, ...msgs];
+              }
+            } catch (e: any) {
+              console.log('[OM] profile inject failed', String(e?.message ?? e).slice(0, 120));
+            }
+            const out = await orchestrator.stream(msgs, opts as any);
             return { textStream: (out as any).textStream as ReadableStream<string> };
           },
         },

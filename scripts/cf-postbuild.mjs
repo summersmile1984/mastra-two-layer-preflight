@@ -1,8 +1,9 @@
-// CloudflareDeployer 不支持 assets/DO 配置：build 后给 .mastra/output/wrangler.json 补齐。
+// CloudflareDeployer 不支持 assets/DO/AI/Vectorize 配置：build 后给 .mastra/output/wrangler.json 补齐。
 // 未命中静态文件的请求（/rooms/*、/auth/*、/health-l1 等自定义路由）照常进入 Mastra Worker。
 // - apps/web/dist/      → static/        （SPA：登录 + 房间 + 聊天，根路径唯一入口）
 // - room-do.js          → worker-entry.mjs 重导出 RoomDO（mastra 入口只导出 default { fetch }，
 //                          DO 类穿不过；wrangler DO 绑定要求类从 main 模块导出，见 spec S2.8.1）
+// - AI + VECTORIZE(om-memory)：OM 语义召回的嵌入与向量库（observational-memory spec S2.7）
 import { cpSync, readFileSync, writeFileSync, rmSync, existsSync, mkdirSync, copyFileSync } from 'node:fs';
 const out = '.mastra/output';
 rmSync(`${out}/static`, { recursive: true, force: true });
@@ -38,5 +39,10 @@ w.assets = { directory: './static', html_handling: 'auto-trailing-slash', not_fo
 w.main = './worker-entry.mjs';
 w.durable_objects = { bindings: [{ name: 'ROOM_DO', class_name: 'RoomDO' }] };
 w.migrations = [{ tag: 'v1', new_sqlite_classes: ['RoomDO'] }];
+w.ai = { binding: 'AI' };
+w.vectorize = [
+  { binding: 'VECTORIZE', index_name: 'om-memory' },
+  { binding: 'VECTORIZE_OBS', index_name: 'om-memory-obs' },
+];
 writeFileSync(f, JSON.stringify(w, null, 2));
-console.log('[cf-postbuild] assets -> ./static, main -> ./worker-entry.mjs, DO binding ROOM_DO');
+console.log('[cf-postbuild] assets -> ./static, main -> ./worker-entry.mjs, DO binding ROOM_DO, AI + VECTORIZE(om-memory/om-memory-obs)');
