@@ -1,0 +1,13 @@
+{
+  "running": true,
+  "online": true,
+  "lastClaimAt": "2026-11-03T03:47:24.671Z",
+  "lastTaskId": "t-desk-cua-1793677642",
+  "lastKind": "cua",
+  "lastState": "completed",
+  "lastSummary": "CUA real (trycua CLI) completed for t-desk-cua-1793677642 screenshot: /var/folders/v5/vwp83hn54v75tx3l7kqjdp7w0000gn/T/cua-l2/t-desk-cua-1793677642.png (321039 bytes) actions: switch host | screenshot → /var/folders/v5/vwp83hn54v75tx3l7kqjd",
+  "queueHint": "idle (no queued sandbox task)",
+  "error": null,
+  "pid": 39547,
+  "updatedAt": "2026-11-03T03:47:31.126Z"
+}

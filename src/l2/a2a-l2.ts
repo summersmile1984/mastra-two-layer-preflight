@@ -28,6 +28,7 @@ export function commandExists(cmd: string): boolean {
 import { z } from 'zod';
 import { createScriptedModel } from '../model/scripted-model';
 import { acpProfile } from './acp-worker';
+import { withProxy, resolveProxyUrl } from './proxy-fetch';
 import { takeTaskSecrets, releaseTaskSecrets, redactKnownSecrets } from '../secrets';
 import type { Runtime } from '../protocol';
 
@@ -107,7 +108,9 @@ export class AllowlistedPushSender {
       if (!this.allowed.includes(url)) { log('push REJECTED (not allowlisted)', { url }); continue; }
       log('push POST', { taskId: task.id, state: task.status.state, url });
       try {
-      const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', ...(cfg.pushNotificationConfig.token ? { 'X-A2A-Notification-Token': cfg.pushNotificationConfig.token } : {}) }, body: JSON.stringify(task), signal: AbortSignal.timeout(30000) });
+      const proxy = resolveProxyUrl();
+      if (proxy) log('push via proxy', { proxy });
+      const res = await fetch(url, withProxy({ method: 'POST', headers: { 'content-type': 'application/json', ...(cfg.pushNotificationConfig.token ? { 'X-A2A-Notification-Token': cfg.pushNotificationConfig.token } : {}) }, body: JSON.stringify(task), signal: AbortSignal.timeout(30000) }));
       log('push delivered', { status: res.status });
       } catch (e: any) { log('push FAILED', { url, err: String(e?.message ?? e).slice(0, 120) }); }
     }

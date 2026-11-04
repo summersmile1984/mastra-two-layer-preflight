@@ -1,0 +1,80 @@
+@import 'tailwindcss';
+
+/* 设计锚：Grok 风格 —— 浅色侧栏、气泡、暗色自适应。色值沿用 cf-public/index.html 已验证配色。 */
+@theme {
+  --color-bg: #ffffff;
+  --color-side: #f6f6f7;
+  --color-line: #e7e7ea;
+  --color-fg: #111111;
+  --color-mut: #6b6b74;
+  --color-me: #111111;
+  --color-mefg: #ffffff;
+  --color-bot: #f1f1f3;
+  --color-acc: #2563eb;
+  --color-card: #fafafa;
+  --font-sans: -apple-system, 'PingFang SC', 'Noto Sans SC', system-ui, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  /* 暗色用普通 :root 覆盖变量；@theme 嵌在 media 里会被 Tailwind 提升合并导致永久暗色 */
+  :root {
+    --color-bg: #0d0d0f;
+    --color-side: #141417;
+    --color-line: #26262b;
+    --color-fg: #ececf1;
+    --color-mut: #9a9aa5;
+    --color-me: #ececf1;
+    --color-mefg: #111111;
+    --color-bot: #1c1c21;
+    --color-acc: #60a5fa;
+    --color-card: #16161a;
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.55;
+  background: var(--color-bg);
+  color: var(--color-fg);
+}
+
+/* 打字动画 */
+@keyframes typing-pulse {
+  0%,
+  60%,
+  100% {
+    opacity: 0.25;
+    transform: none;
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+.typing-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-mut);
+  margin: 0 2px;
+  animation: typing-pulse 1.2s infinite;
+}
+
+/* 细滚动条 */
+.thin-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+.thin-scroll::-webkit-scrollbar-thumb {
+  background: var(--color-line);
+  border-radius: 4px;
+}

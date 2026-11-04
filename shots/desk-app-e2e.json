@@ -1,0 +1,38 @@
+{
+  "ok": true,
+  "at": "2026-11-02T23:33:04.694957+08:00",
+  "zone": "Asia/Shanghai",
+  "app": "mastra-l2-desktop",
+  "version": "0.2.2",
+  "window": {
+    "title": "Mastra Desktop",
+    "size": [
+      1200,
+      800
+    ],
+    "captured": true
+  },
+  "screenshot": "shots/desk-app-ui.png",
+  "tauriBinary": "src-tauri/target/debug/mastra-l2-desktop",
+  "tauriDev": true,
+  "claimSmoke": {
+    "status": {
+      "running": true,
+      "online": true,
+      "lastClaimAt": null,
+      "lastTaskId": null,
+      "lastKind": null,
+      "lastState": null,
+      "lastSummary": "claim loop → https://mastra-l1.summersmile1984.workers.dev/l2-claim",
+      "queueHint": "polling",
+      "error": null,
+      "pid": 40908,
+      "updatedAt": "2026-11-02T15:32:57.802Z"
+    },
+    "polledOkNoError": true,
+    "online": true,
+    "note": "claim:dev sidecar polled L1 POST /l2-claim; idle queue is MVP success"
+  },
+  "l1": "https://mastra-l1.summersmile1984.workers.dev",
+  "noPushTokenInArtifacts": true
+}

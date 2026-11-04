@@ -34,6 +34,8 @@ import { D1Store } from '@mastra/cloudflare-d1';
 import { Memory } from '@mastra/memory';
 import { z } from 'zod';
 import { pollL2Task } from '../l1/poll-l2';
+import { roomHandlers } from '../l1/rooms';
+import { buildMastraAuth } from '../auth';
 
 const E = env as any;
 const L2_AGENT_ID = 'l2-worker';
@@ -168,6 +170,7 @@ export const mastra = new Mastra({
     d1_databases: [{ binding: 'DB', database_name: 'mastra-l1', database_id: '26a19832-8ff9-4fe4-a253-9305ae02f6bb' }],
   } as any),
   server: {
+    auth: buildMastraAuth(E as any) as any,
     apiRoutes: [
       registerApiRoute('/health-l1', {
         method: 'GET',
@@ -223,6 +226,16 @@ export const mastra = new Mastra({
           return c.json({ busy, results: done.map((r: any) => ({ state: r.state, text: r.reply || (r.state === 'completed' ? `处理好了：${r.result ?? ''}` : '这次后台处理没成功，请稍后再试。') })) });
         },
       } as any),
+      // rooms / messages / better-auth（多用户共享房间 + 邮箱密码登录）
+      ...roomHandlers({
+        E: E as any,
+        chat: {
+          stream: async (messages, opts) => {
+            const out = await orchestrator.stream(messages as any, opts as any);
+            return { textStream: (out as any).textStream as ReadableStream<string> };
+          },
+        },
+      }).map((h) => registerApiRoute(h.path as any, { method: h.method, requiresAuth: h.requiresAuth, handler: h.handler } as any)),
     ],
   },
 });

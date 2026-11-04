@@ -1,0 +1,13 @@
+{
+  "running": true,
+  "online": true,
+  "lastClaimAt": "2026-11-03T03:46:52.975Z",
+  "lastTaskId": "t-desk-acp-1793677270",
+  "lastKind": "acp",
+  "lastState": "completed",
+  "lastSummary": "上述文件操作已在本机真实执行完成：  - 写入的文件：`/Users/macstudio/mastra-two-layer-preflight/workspace-l2/local/desk-e2e/DESK_E2E_1793677270.txt` - 文件内容：`DESK_E2E_1793677270` - hostname：`alex-mac.local`  以下命令同时完成了文件写入、hostname 输出和 cat 查看文件内容，实际执行输出为：  ``` alex-",
+  "queueHint": "polling",
+  "error": null,
+  "pid": 39547,
+  "updatedAt": "2026-11-03T03:47:15.816Z"
+}

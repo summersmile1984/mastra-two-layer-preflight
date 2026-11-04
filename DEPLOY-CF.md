@@ -15,8 +15,13 @@
 | L2 → Worker A2A push（公网回调 + token 校验） | ✅ 已验证（2026-11-02） |
 | Worker → L2 经 trycloudflare 快速隧道 | ❌ 本验证环境出网封锁 argotunnel 7844（QUIC/HTTP2 均失败，Error 1033）；需在可出网机器上重跑 |
 | **P0：Mastra L1 官方 CloudflareDeployer + D1**（`src/mastra/index.ts`，agent `orchestrator`，DeepSeek） | ✅ 已部署 https://mastra-l1.summersmile1984.workers.dev/api/agents ；`/health-l1`（自定义路由不带 `/api` 前缀） |
-| **P1：聊天 UI 由 Worker 提供**（Workers Static Assets `cf-public/index.html` → 流式 `POST /api/agents/orchestrator/stream`，Memory 存 D1，thread=前端 sid） | ✅ https://mastra-l1.summersmile1984.workers.dev/ |
+| **P1：聊天 UI 由 Worker 提供**（Workers Static Assets；现行 SPA=`apps/web` → `/app`；`index.html` 仍为早期流式 demo） | ✅ https://mastra-l1.summersmile1984.workers.dev/app |
 | 完整 L1（AgentController + UI + SSE + A2A 回调）跑在 Workers | ⏳ P1+，见 [docs/MASTRA-CF-L1-PLAN.md](docs/MASTRA-CF-L1-PLAN.md) |
+
+
+## L1 SPA 前端
+- 源码：`apps/web`（Vite+React+shadcn/Tailwind）。`npm run web:dev` 本地；`npm run cf:deploy` 会先 `apps/web` build 再拷进 `.mastra/output/static`。
+- 验证：`curl -sL https://mastra-l1…/app | rg ui-spa-light`；登录后浅色侧栏+气泡。
 
 ## 0. L1 部署（P0）
 ```bash
@@ -95,4 +100,10 @@ To keep completion working without Mac outbound to workers.dev:
 - Worker secret `L2_A2A_URL` = the cloudflared tunnel URL (quick tunnels change on restart — re-set the secret).
 - After a successful A2A `message/send`, the Worker schedules `waitUntil(pollL2(id))` (from `cloudflare:workers`), which polls L2 through the tunnel with A2A `tasks/get` until the task is terminal, then writes D1 and composes the reply.
 - `/a2a-callback` stays as the push path and is idempotent with the poller (whichever lands first wins). L2's push sender timeout is 30s.
+- **Mac outbound via Clash**: set `HTTPS_PROXY=http://127.0.0.1:7897` (and optionally `HTTP_PROXY` the same) when starting L2 so `/a2a-callback` push uses undici `ProxyAgent`. Example:
+  `HTTPS_PROXY=http://127.0.0.1:7897 HTTP_PROXY=http://127.0.0.1:7897 npm run start:l2`
+  Desktop claim already bootstraps system proxy / `HTTPS_PROXY` via `apps/l2-desktop/src/bootstrap.ts`; A2A allowlist push in `src/l2/a2a-l2.ts` reads the same env at POST time.
 - Later: put L1 on a custom domain (not workers.dev) and point `L2_PUSH_ALLOWLIST` / `L1_PUBLIC_URL` at it so push works directly.
+
+## Auth & rooms
+See [AUTH.md](AUTH.md). Apply `migrations/0001_auth_rooms.sql` and set `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, (dev) `AUTH_DEV_MODE=1`. Agent generate/stream now needs a session (DEV bypass: Bearer PUSH_TOKEN).

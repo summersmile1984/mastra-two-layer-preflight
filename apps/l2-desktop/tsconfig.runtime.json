@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "noEmit": true,
+    "paths": { "@mastra-preflight/shared": ["../../packages/shared/src/index.ts"] }
+  },
+  "include": ["src/main.ts", "src/claim.ts", "src/config.ts", "src/dispatch.ts", "src/status.ts", "src/acp/runner.ts", "src/cua/runner.ts"]
+}
