@@ -41,7 +41,7 @@ import { ensureOmTable, installD1OmSupport } from './om-d1';
 import { VectorizeStore } from './vectorize-store';
 import { createWorkersAiEmbedder } from './workers-ai-embedder';
 import { ensureProfileTable, upsertProfile, resolveUserByName, loadRoomProfileBlock } from './profile';
-import { ensurePersonaConfig, getPersona, updatePersona, personaBlock, buildThreadBlock, buildModelId } from './persona';
+import { ensurePersonaConfig, getPersona, updatePersona, personaBlock, buildThreadBlock, buildModelId, SEED_MODEL_ID } from './persona';
 import { indexThreadMessages } from './index-messages';
 // provider-registry 的 package exports 不放行子路径——相对路径导入让打包器内联（运行时无解析）
 import providerRegistry from '../../node_modules/@mastra/core/dist/provider-registry.json';
@@ -182,7 +182,7 @@ const omObservationCfg = {
 } as any;
 const omReflectionCfg = { observationTokens: 8_000, failurePolicy: 'continue', instruction: '' } as any;
 
-export async function syncEngineCopy(p?: { om_observe: string; om_reflect: string; tool_dispatch: string }) {
+export async function syncEngineCopy(p?: { om_observe: string; om_reflect: string; tool_dispatch: string; model_gateway: string; model_name: string; model_effort: string }) {
   try {
     const persona = p ?? (await getPersona(E.DB));
     omObservationCfg.instruction = persona.om_observe;
@@ -214,7 +214,7 @@ const memoryRef = new Memory({
     // 与 OM 观测检索互补——OM 管压缩摘要，semanticRecall 找回沉出窗口的原始消息。
     semanticRecall: { topK: 5, messageRange: 2, scope: 'resource' },
     observationalMemory: {
-      model: 'deepseek/deepseek-chat',
+      model: SEED_MODEL_ID,
       retrieval: { vector: true },
       observation: omObservationCfg,
       reflection: omReflectionCfg,
@@ -425,9 +425,21 @@ export const mastra = new Mastra({
           if (!u) return c.json({ error: 'unauthorized' }, 401);
           const reg: any = providerRegistry;
           const providers: any = reg?.providers ?? {};
-          const gateways = ['deepseek', 'cloudflare-workers-ai', 'mastra']
+          const gateways = ['deepseek', 'cloudflare-workers-ai']
             .filter((g) => providers[g])
             .map((g) => ({ gateway: g, models: providers[g].models ?? [] }));
+          // mastra 网关不在 provider-registry（运行时 MastraGateway）——清单运行时 fetchProviders，无 key 时降级空列表
+          let mastraModels: string[] = [];
+          try {
+            const { MastraGateway } = await import('@mastra/core/llm');
+            const gw = new MastraGateway();
+            if (gw.shouldEnable?.()) {
+              const provs = await gw.fetchProviders();
+              mastraModels = Object.entries(provs ?? {}).flatMap(([prov, cfg]: any) =>
+                ((cfg?.models ?? []) as any[]).map((m: any) => `${prov}/${typeof m === 'string' ? m : m?.id ?? ''}`));
+            }
+          } catch {}
+          gateways.push({ gateway: 'mastra', models: mastraModels });
           return c.json({
             gateways,
             effortLevels: ['provider-default', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],

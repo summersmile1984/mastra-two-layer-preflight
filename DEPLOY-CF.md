@@ -107,3 +107,6 @@ To keep completion working without Mac outbound to workers.dev:
 
 ## Auth & rooms
 See [AUTH.md](AUTH.md). Apply `migrations/0001_auth_rooms.sql` and set `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, (dev) `AUTH_DEV_MODE=1`. Agent generate/stream now needs a session (DEV bypass: Bearer PUSH_TOKEN).
+
+## 模型配置（model-gateway-config）
+Workers AI 网关（Mastra provider `cloudflare-workers-ai`）鉴权：`wrangler secret put CLOUDFLARE_API_KEY`（值同 CLOUDFLARE_API_TOKEN）+ cf-postbuild 写入 `CLOUDFLARE_ACCOUNT_ID`。模型/effort 在 SPA「设置 → 模型设置」或 `PUT /settings/persona`（model_gateway/model_name/model_effort）。

@@ -57,7 +57,7 @@ export async function ensurePersonaConfig(db: any): Promise<void> {
         main_room_name TEXT NOT NULL, updated_at INTEGER NOT NULL, updated_by TEXT)`,
     )
     .run();
-  // 0003 扩展列（幂等；旧库补列）
+  // 0003/0004 扩展列（幂等；旧库补列）
   for (const col of ['base_prompt', 'tone_main', 'tone_room', 'om_observe', 'om_reflect', 'tool_dispatch', 'model_gateway', 'model_name', 'model_effort']) {
     await db.prepare(`ALTER TABLE persona_config ADD COLUMN ${col} TEXT`).run().catch(() => null);
   }
@@ -141,6 +141,9 @@ export async function updatePersona(db: any, patch: Record<string, unknown>, upd
   }
   return getPersona(db, true);
 }
+
+/** 种子模型串（OM 构造等模块级场景用，运行期以配置为准）。 */
+export const SEED_MODEL_ID = `${SEED.model_gateway}/${SEED.model_name}`;
 
 /** 模型串（model-gateway-config S2.1）：Mastra ModelRouter 路由形式 gateway/model。 */
 export function buildModelId(p: Pick<PersonaConfig, 'model_gateway' | 'model_name'>): string {
