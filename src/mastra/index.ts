@@ -42,6 +42,7 @@ import { VectorizeStore } from './vectorize-store';
 import { createWorkersAiEmbedder } from './workers-ai-embedder';
 import { ensureProfileTable, upsertProfile, resolveUserByName, loadRoomProfileBlock } from './profile';
 import { ensurePersonaConfig, getPersona, updatePersona, personaBlock, buildThreadBlock } from './persona';
+import { indexThreadMessages } from './index-messages';
 
 const E = env as any;
 const L2_AGENT_ID = 'l2-worker';
@@ -200,6 +201,9 @@ const memoryRef = new Memory({
   embedder: createWorkersAiEmbedder(() => E.AI),
   options: {
     lastMessages: 20,
+    // 消息向量 RAG（memory-recall-search S2.2）：saveMessages 时嵌入 memory_messages_1024，
+    // 与 OM 观测检索互补——OM 管压缩摘要，semanticRecall 找回沉出窗口的原始消息。
+    semanticRecall: { topK: 5, messageRange: 2, scope: 'resource' },
     observationalMemory: {
       model: 'deepseek/deepseek-chat',
       retrieval: { vector: true },
@@ -550,6 +554,13 @@ const omQueueHandler = async (batch: any) => {
         console.log('[OM] observe result', JSON.stringify(res ?? null).slice(0, 300));
       }
       try { await mem?.settled?.(); } catch {}
+      // 消息向量幂等索引（memory-recall-search S2.2）：OM 不做消息嵌入，自建补上
+      try {
+        const n = await indexThreadMessages({ store: getStore().stores?.memory, vector: vectorStore, aiBinding: () => E.AI, threadId, resourceId });
+        console.log('[OM] message-index', JSON.stringify({ threadId, n }));
+      } catch (e: any) {
+        console.log('[OM] message-index failed', String(e?.message ?? e).slice(0, 140));
+      }
       console.log('[OM] cycle done', JSON.stringify({ kind: body.kind ?? 'observe', threadId }));
       try { msg.ack(); } catch {}
     } catch (e: any) {

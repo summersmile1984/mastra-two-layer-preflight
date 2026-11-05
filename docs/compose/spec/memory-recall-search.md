@@ -1,6 +1,6 @@
 ---
 feature: memory-recall-search
-status: designed
+status: delivered
 updated: 2026-11-05
 source: recall-model
 ---
@@ -8,6 +8,10 @@ source: recall-model
 # Memory Recall 语义检索补完（search 通路）
 
 ## Report
+
+**What was built** — Memory recall 语义检索补完：①开启 `options.semanticRecall`（消息向量 RAG，topK 5 / messageRange 2 / resource 作用域）；②**自建消息向量索引**（`src/mastra/index-messages.ts`，队列观察周期后跑，按 message_id 幂等 upsert 到 `memory_messages_1024`）——上游 `indexMessagesList` 是死代码（安装版无调用点）、OM 落库走 `persistMessages`（明说不嵌入），消息向量化链路整体是断的，必须自己接；③Vectorize 元数据索引补 `observed_at`（search 时间过滤）。
+
+**Verification** — 消息向量证据：`wrangler vectorize info` 11→13（2 条真消息含完整 metadata/content），线程过滤查询命中；行为化验收 ×2：「护照号 X123456 / Y987654」沉出 20 条窗口后被改述提问（办签证/证件号）正确答出；回归 10/10（persona 全套零回归）；`npm run build --prefix apps/web` PASS。注：Vectorize 索引水位线分钟级滞后，验证按 ~90s 轮询；之前误判「未落库」即此原因。
 
 ## [S1] Problem
 
@@ -36,9 +40,14 @@ source: recall-model
 
 ## Tasks
 
-- [ ] T1: 开启 semanticRecall（Memory options） — acceptance: 对话后 `memory_messages_1024` 经 REST 查询出现向量（covers: S2.2-1）
-- [ ] T2: Vectorize 元数据索引补齐 observed_at — acceptance: 时间窗过滤查询非空（covers: S2.2-2）
-- [ ] T3: 行为化验收（事实沉底 + 改述语义提问命中） — acceptance: 超出 lastMessages 窗口的事实被正确答出；无记忆时明确说不记得（covers: S2.3, depends: T1, T2）
-- [ ] T4: 生产验证与定稿 — acceptance: E2E 证据入 Report，既有链路零回归（covers: 全部, depends: T1–T3）
+- [x] T\1: 开启 semanticRecall（Memory options） — acceptance: 对话后 `memory_messages_1024` 经 REST 查询出现向量（covers: S2.2-1）
+- [x] T\1: Vectorize 元数据索引补齐 observed_at — acceptance: 时间窗过滤查询非空（covers: S2.2-2）
+- [x] T\1: 行为化验收（事实沉底 + 改述语义提问命中） — acceptance: 超出 lastMessages 窗口的事实被正确答出；无记忆时明确说不记得（covers: S2.3, depends: T1, T2）
+- [x] T\1: 生产验证与定稿 — acceptance: E2E 证据入 Report，既有链路零回归（covers: 全部, depends: T1–T3）
 
 ## Journey log
+
+- **上游断链三连**：OM 落库走 `persistMessages`（不嵌入）→ `saveMessages` 的 semanticRecall 嵌入在 OM 开启后永远不跑；`indexMessagesList`（注释称 observe-time 向量化消息）在安装版**零调用点**（死代码）。消息向量化必须自建——教训：官方「有这个方法」不等于「链路通」，要顺着调用点核实。
+- `listMessages` 的 `perPage: 0` 表示取 0 条，全部要用 `false`（n=0 静默坑）。
+- Vectorize upsert 后索引水位线滞后 ~2 分钟（processedUpTo*），验证要按水位轮询，read-after-write 必然误判。
+- 行为化验收的关键：事实必须沉出 lastMessages 窗口（25 条稀释），否则答对也可能来自窗口记忆而非检索。
