@@ -7,6 +7,7 @@
  * - 同步：GET /rooms/:id/messages?after= 轮询，返回 {messages, busy}
  */
 import { requireSession, AuthError, getAuth, type AuthEnv } from '../auth';
+import { getPersona } from '../mastra/persona';
 
 export type RoomEnv = AuthEnv & { DB: any };
 
@@ -27,12 +28,13 @@ async function ensureMainRoom(db: any, userId: string, mainName: string) {
       .prepare(
         `INSERT INTO rooms (id, name, created_by, created_at, updated_at, is_main)
          SELECT ?, ?, ?, ?, ?, 1 WHERE NOT EXISTS (
-           SELECT 1 FROM rooms r JOIN room_members m ON m.room_id = r.id WHERE m.user_id = ? AND r.is_main = 1)`,
+           SELECT 1 FROM rooms WHERE is_main = 1 AND created_by = ?)`,
       )
       .bind(rid('room'), mainName, userId, now(), now(), userId)
       .run();
+    // 回查必须走 created_by（此刻尚无成员行，用 members JOIN 会查空 → 成员插入被跳过成孤儿房）
     const row: any = await db
-      .prepare('SELECT r.id FROM rooms r JOIN room_members m ON m.room_id = r.id WHERE m.user_id = ? AND r.is_main = 1 LIMIT 1')
+      .prepare('SELECT id FROM rooms WHERE is_main = 1 AND created_by = ? ORDER BY created_at DESC LIMIT 1')
       .bind(userId)
       .first();
     if (row?.id) {
@@ -44,6 +46,11 @@ async function ensureMainRoom(db: any, userId: string, mainName: string) {
         .bind(row.id, userId, now(), now(), row.id, userId)
         .run();
     }
+    // 显示名随 persona_config.main_room_name 同步（T4 验收：改配置后主会话名随之变化）
+    await db
+      .prepare('UPDATE rooms SET name = ? WHERE is_main = 1 AND created_by = ? AND name <> ?')
+      .bind(mainName, userId, mainName)
+      .run();
   } catch {}
 }
 
@@ -107,10 +114,11 @@ function sseResponse(stream: ReadableStream): Response {
 async function listRooms(c: any, E: RoomEnv) {
   const user = await requireSession(c.req.raw ?? { headers: c.req.headers }, E);
   try {
-    const { getPersona } = await import('../mastra/persona');
     const p = await getPersona(E.DB);
     await ensureMainRoom(E.DB, user.id, p.main_room_name);
-  } catch {}
+  } catch (e: any) {
+    console.log('[rooms] ensureMainRoom failed', String(e?.message ?? e).slice(0, 160));
+  }
   const { results } = await E.DB.prepare(
     `SELECT r.id, r.name, r.created_by, r.updated_at, r.is_main, m.role, m.last_read_at,
             (SELECT content FROM messages WHERE room_id=r.id ORDER BY created_at DESC LIMIT 1) AS last_message,
