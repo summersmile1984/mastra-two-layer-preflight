@@ -22,6 +22,9 @@ export type Persona = {
   om_observe: string;
   om_reflect: string;
   tool_dispatch: string;
+  model_gateway: string;
+  model_name: string;
+  model_effort: string;
   updated_at: number;
   updated_by: string | null;
 };
@@ -133,9 +136,17 @@ export async function updatePersona(patch: {
   om_observe?: string;
   om_reflect?: string;
   tool_dispatch?: string;
+  model_gateway?: string;
+  model_name?: string;
+  model_effort?: string;
 }): Promise<Persona> {
   const r = await fetch('/settings/persona', jsonInit('PUT', patch));
   return (await j<{ persona: Persona }>(r)).persona;
+}
+
+export async function getModels(): Promise<{ gateways: { gateway: string; models: string[] }[]; effortLevels: string[] }> {
+  const r = await fetch('/settings/models', { credentials: 'same-origin' });
+  return j(r);
 }
 
 // ---------- 聊天流 ----------

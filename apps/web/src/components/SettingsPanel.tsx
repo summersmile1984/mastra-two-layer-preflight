@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { Persona } from '../lib/api';
-import { getPersona, updatePersona } from '../lib/api';
+import { getModels, getPersona, updatePersona } from '../lib/api';
 
 export function SettingsPanel({
   onClose,
@@ -19,13 +19,18 @@ export function SettingsPanel({
   const [omObserve, setOmObserve] = useState('');
   const [omReflect, setOmReflect] = useState('');
   const [toolDispatch, setToolDispatch] = useState('');
+  const [modelGateway, setModelGateway] = useState('');
+  const [modelName, setModelName] = useState('');
+  const [modelEffort, setModelEffort] = useState('');
+  const [gateways, setGateways] = useState<{ gateway: string; models: string[] }[]>([]);
+  const [effortLevels, setEffortLevels] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    getPersona()
-      .then((p) => {
+    Promise.all([getPersona(), getModels()])
+      .then(([p, m]) => {
         setName(p.name);
         setRole(p.role);
         setStyle(p.style);
@@ -36,6 +41,11 @@ export function SettingsPanel({
         setOmObserve(p.om_observe ?? '');
         setOmReflect(p.om_reflect ?? '');
         setToolDispatch(p.tool_dispatch ?? '');
+        setModelGateway(p.model_gateway ?? '');
+        setModelName(p.model_name ?? '');
+        setModelEffort(p.model_effort ?? '');
+        setGateways(m.gateways);
+        setEffortLevels(m.effortLevels);
       })
       .catch(() => setErr('加载配置失败，请稍后重试'))
       .finally(() => setLoading(false));
@@ -57,6 +67,9 @@ export function SettingsPanel({
         om_observe: omObserve,
         om_reflect: omReflect,
         tool_dispatch: toolDispatch,
+        model_gateway: modelGateway,
+        model_name: modelName,
+        model_effort: modelEffort,
       });
       onSuccess(p);
     } catch {
@@ -64,6 +77,15 @@ export function SettingsPanel({
     } finally {
       setBusy(false);
     }
+  }
+
+  const gatewayModels = gateways.find((g) => g.gateway === modelGateway)?.models ?? [];
+  const modelOptions =
+    modelName && !gatewayModels.includes(modelName) ? [...gatewayModels, modelName] : gatewayModels;
+
+  function onGatewayChange(g: string) {
+    setModelGateway(g);
+    setModelName(gateways.find((x) => x.gateway === g)?.models[0] ?? '');
   }
 
   return (
@@ -221,6 +243,54 @@ export function SettingsPanel({
                 placeholder="任务派发工具描述"
                 className="w-full resize-none rounded-xl border border-[var(--color-line)] bg-[var(--color-bg)] px-3 py-2 outline-none focus:border-[var(--color-acc)]"
               />
+            </label>
+
+            <div className="mb-4 mt-6 border-t border-[var(--color-line)] pt-4">
+              <p className="text-sm font-semibold">模型设置</p>
+              <p className="text-xs text-[var(--color-mut)]">选择模型网关、模型与推理力度</p>
+            </div>
+
+            <label className="mb-3 block">
+              <span className="mb-1 block text-xs text-[var(--color-mut)]">模型网关</span>
+              <select
+                value={modelGateway}
+                onChange={(e) => onGatewayChange(e.target.value)}
+                className="w-full rounded-xl border border-[var(--color-line)] bg-[var(--color-bg)] px-3 py-2 outline-none focus:border-[var(--color-acc)]"
+              >
+                {gateways.map((g) => (
+                  <option key={g.gateway} value={g.gateway}>
+                    {g.gateway}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="mb-3 block">
+              <span className="mb-1 block text-xs text-[var(--color-mut)]">模型</span>
+              <select
+                value={modelName}
+                onChange={(e) => setModelName(e.target.value)}
+                className="w-full rounded-xl border border-[var(--color-line)] bg-[var(--color-bg)] px-3 py-2 outline-none focus:border-[var(--color-acc)]"
+              >
+                {modelOptions.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="mb-5 block">
+              <span className="mb-1 block text-xs text-[var(--color-mut)]">推理力度 / effort</span>
+              <select
+                value={modelEffort}
+                onChange={(e) => setModelEffort(e.target.value)}
+                className="w-full rounded-xl border border-[var(--color-line)] bg-[var(--color-bg)] px-3 py-2 outline-none focus:border-[var(--color-acc)]"
+              >
+                {effortLevels.map((l) => (
+                  <option key={l} value={l}>
+                    {l}
+                  </option>
+                ))}
+              </select>
             </label>
           </>
         )}

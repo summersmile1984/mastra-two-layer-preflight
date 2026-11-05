@@ -41,8 +41,10 @@ import { ensureOmTable, installD1OmSupport } from './om-d1';
 import { VectorizeStore } from './vectorize-store';
 import { createWorkersAiEmbedder } from './workers-ai-embedder';
 import { ensureProfileTable, upsertProfile, resolveUserByName, loadRoomProfileBlock } from './profile';
-import { ensurePersonaConfig, getPersona, updatePersona, personaBlock, buildThreadBlock } from './persona';
+import { ensurePersonaConfig, getPersona, updatePersona, personaBlock, buildThreadBlock, buildModelId } from './persona';
 import { indexThreadMessages } from './index-messages';
+// provider-registry 的 package exports 不放行子路径——相对路径导入让打包器内联（运行时无解析）
+import providerRegistry from '../../node_modules/@mastra/core/dist/provider-registry.json';
 
 const E = env as any;
 const L2_AGENT_ID = 'l2-worker';
@@ -188,8 +190,15 @@ export async function syncEngineCopy(p?: { om_observe: string; om_reflect: strin
     // Memory 构造时把 options 拷进 threadConfig——必须同步补实例上的这份（引擎初始化读它）；
     // 引擎创建后改这里不再热生效（引擎快照），冷启动兜底（S2.1 生效语义）。
     const tc: any = (memoryRef as any)?.threadConfig;
-    if (tc?.observationalMemory?.observation) tc.observationalMemory.observation.instruction = persona.om_observe;
-    if (tc?.observationalMemory?.reflection) tc.observationalMemory.reflection.instruction = persona.om_reflect;
+    if (tc?.observationalMemory?.observation) {
+      tc.observationalMemory.observation.instruction = persona.om_observe;
+      tc.observationalMemory.observation.modelSettings = { ...(tc.observationalMemory.observation.modelSettings ?? {}), reasoning: persona.model_effort };
+    }
+    if (tc?.observationalMemory?.reflection) {
+      tc.observationalMemory.reflection.instruction = persona.om_reflect;
+      tc.observationalMemory.reflection.modelSettings = { ...(tc.observationalMemory.reflection.modelSettings ?? {}), reasoning: persona.model_effort };
+    }
+    if (tc?.observationalMemory) tc.observationalMemory.model = buildModelId(persona);
     (dispatch_to_sandbox as any).description = persona.tool_dispatch;
   } catch {}
 }
@@ -235,7 +244,15 @@ const orchestrator = new Agent({
     const p = await getPersona(E.DB);
     return `${p.base_prompt}\n${personaBlock(p)}`;
   },
-  model: 'deepseek/deepseek-chat',
+  // 模型与 effort 全配置（model-gateway-config S2.1）：官方 DynamicArgument 函数槽位，每轮求值
+  model: async () => {
+    const p = await getPersona(E.DB);
+    return buildModelId(p) as any;
+  },
+  modelSettings: async () => {
+    const p = await getPersona(E.DB);
+    return { reasoning: p.model_effort } as any;
+  },
   tools: { dispatch_to_sandbox },
   memory: memoryRef,
 });
@@ -399,6 +416,24 @@ export const mastra = new Mastra({
             } as any),
           ]
         : []),
+      // 模型目录（model-gateway-config S2.2）：从已装 provider-registry 读，级联数据源零硬编码
+      registerApiRoute('/settings/models', {
+        method: 'GET',
+        requiresAuth: false,
+        handler: async (c: any) => {
+          const u = await getSessionUser(c.req.raw ?? { headers: c.req.headers }, E as any);
+          if (!u) return c.json({ error: 'unauthorized' }, 401);
+          const reg: any = providerRegistry;
+          const providers: any = reg?.providers ?? {};
+          const gateways = ['deepseek', 'cloudflare-workers-ai', 'mastra']
+            .filter((g) => providers[g])
+            .map((g) => ({ gateway: g, models: providers[g].models ?? [] }));
+          return c.json({
+            gateways,
+            effortLevels: ['provider-default', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+          });
+        },
+      } as any),
       // 人格配置（S2.5）：登录可读写；persona 是数据不是代码
       registerApiRoute('/settings/persona', {
         method: 'GET',

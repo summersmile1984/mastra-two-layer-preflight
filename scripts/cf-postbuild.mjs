@@ -50,6 +50,8 @@ w.migrations = [{ tag: 'v1', new_sqlite_classes: ['RoomDO'] }];
 w.ai = { binding: 'AI' };
 // Paid 套餐显式锁 30s CPU（免费版曾拒绝此配置，API 100328）
 w.limits = { cpu_ms: 30000 };
+// Workers AI provider（Mastra provider-registry）鉴权：CLOUDFLARE_API_KEY secret + 账号 ID
+w.vars = { ...(w.vars ?? {}), CLOUDFLARE_ACCOUNT_ID: '8a1dca996a18a595f0b931f106539248' };
 w.vectorize = [
   { binding: 'VECTORIZE', index_name: 'om-memory' },
   { binding: 'VECTORIZE_OBS', index_name: 'om-memory-obs' },

@@ -14,6 +14,9 @@ export type PersonaConfig = {
   om_observe: string;
   om_reflect: string;
   tool_dispatch: string;
+  model_gateway: string;
+  model_name: string;
+  model_effort: string;
   updated_at: number;
   updated_by: string | null;
 };
@@ -35,11 +38,15 @@ const SEED: Omit<PersonaConfig, 'updated_at' | 'updated_by'> = {
   om_observe: '你是秘书的记忆观察员。重点记录发言者的身份/称呼、偏好、决定、承诺与待办、在做的事、重要事实；忽略寒暄。',
   om_reflect: '压缩合并时优先保留主人的身份/称呼/偏好/决定/待办/事实，丢弃寒暄与重复。',
   tool_dispatch: '把慢任务派发到后台执行，立即返回（不等待结果）；完成后会自动通知。',
+  model_gateway: 'deepseek',
+  model_name: 'deepseek-chat',
+  model_effort: 'provider-default',
 };
 
 const LIMITS = {
   name: 200, role: 500, style: 1000, main_room_name: 50,
   base_prompt: 4000, tone_main: 500, tone_room: 500, om_observe: 500, om_reflect: 500, tool_dispatch: 500,
+  model_gateway: 100, model_name: 200, model_effort: 20,
 };
 
 export async function ensurePersonaConfig(db: any): Promise<void> {
@@ -51,7 +58,7 @@ export async function ensurePersonaConfig(db: any): Promise<void> {
     )
     .run();
   // 0003 扩展列（幂等；旧库补列）
-  for (const col of ['base_prompt', 'tone_main', 'tone_room', 'om_observe', 'om_reflect', 'tool_dispatch']) {
+  for (const col of ['base_prompt', 'tone_main', 'tone_room', 'om_observe', 'om_reflect', 'tool_dispatch', 'model_gateway', 'model_name', 'model_effort']) {
     await db.prepare(`ALTER TABLE persona_config ADD COLUMN ${col} TEXT`).run().catch(() => null);
   }
   await db
@@ -66,9 +73,11 @@ export async function ensurePersonaConfig(db: any): Promise<void> {
     .prepare(
       `UPDATE persona_config SET base_prompt = COALESCE(base_prompt, ?), tone_main = COALESCE(tone_main, ?),
        tone_room = COALESCE(tone_room, ?), om_observe = COALESCE(om_observe, ?), om_reflect = COALESCE(om_reflect, ?),
-       tool_dispatch = COALESCE(tool_dispatch, ?) WHERE id = 1`,
+       tool_dispatch = COALESCE(tool_dispatch, ?), model_gateway = COALESCE(model_gateway, ?),
+       model_name = COALESCE(model_name, ?), model_effort = COALESCE(model_effort, ?) WHERE id = 1`,
     )
-    .bind(SEED.base_prompt, SEED.tone_main, SEED.tone_room, SEED.om_observe, SEED.om_reflect, SEED.tool_dispatch)
+    .bind(SEED.base_prompt, SEED.tone_main, SEED.tone_room, SEED.om_observe, SEED.om_reflect, SEED.tool_dispatch,
+      SEED.model_gateway, SEED.model_name, SEED.model_effort)
     .run();
 }
 
@@ -100,6 +109,7 @@ export async function getPersona(db: any, force = false): Promise<PersonaConfig>
     name: pick('name'), role: pick('role'), style: pick('style'), main_room_name: pick('main_room_name'),
     base_prompt: pick('base_prompt'), tone_main: pick('tone_main'), tone_room: pick('tone_room'),
     om_observe: pick('om_observe'), om_reflect: pick('om_reflect'), tool_dispatch: pick('tool_dispatch'),
+    model_gateway: pick('model_gateway'), model_name: pick('model_name'), model_effort: pick('model_effort'),
     updated_at: Number(row?.updated_at ?? 0),
     updated_by: row?.updated_by ? String(row.updated_by) : null,
   };
@@ -130,6 +140,11 @@ export async function updatePersona(db: any, patch: Record<string, unknown>, upd
     await db.prepare(`UPDATE persona_config SET ${fields.join(', ')}, updated_at = ?, updated_by = ? WHERE id = 1`).bind(...args).run();
   }
   return getPersona(db, true);
+}
+
+/** 模型串（model-gateway-config S2.1）：Mastra ModelRouter 路由形式 gateway/model。 */
+export function buildModelId(p: Pick<PersonaConfig, 'model_gateway' | 'model_name'>): string {
+  return `${p.model_gateway}/${p.model_name}`;
 }
 
 /** 装配进上下文的身份块（S2.3）。 */
