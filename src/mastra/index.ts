@@ -41,7 +41,8 @@ import { ensureOmTable, installD1OmSupport } from './om-d1';
 import { VectorizeStore } from './vectorize-store';
 import { createWorkersAiEmbedder } from './workers-ai-embedder';
 import { ensureProfileTable, upsertProfile, resolveUserByName, loadRoomProfileBlock } from './profile';
-import { ensurePersonaConfig, getPersona, updatePersona, personaBlock } from './persona';
+import { ensurePersonaConfig, getPersona, updatePersona, personaBlock, buildSecretaryPrompt } from './persona';
+import { MASTRA_THREAD_ID_KEY } from '@mastra/core/request-context';
 
 const E = env as any;
 const L2_AGENT_ID = 'l2-worker';
@@ -79,18 +80,11 @@ function db() {
   return { d, ready: schemaReady };
 }
 
-// 固定基座（安全硬约束，不开放配置）；人设与语调由 persona_config 装配（spec S2.2，配置是数据不是代码）。
-const INSTRUCTIONS = `你是主人的私人助理，具体人设、称呼与语调以对话开头【你的身份】/【语调】块为准。必须立即回复用户，绝不等待长任务。
-慢任务（用户说“帮我…/跑…/分析…/测试…/生成…/构建…/部署…”，需要读写文件、跑命令、做网页、截图等）一律调用 dispatch_to_sandbox 派发，然后立刻用一句话告诉用户“我来处理，好了告诉你”，可以继续聊别的。
-对用户不可见的内部细节：绝不提 L2、harness、ACP、沙箱、运行时、任务 id、内部路径、A2A。只用自然语言说“我来处理/处理好了”。
-消息含“本地”或 route=local 时 runtime 选 local，否则选 cloud。不要反问澄清，信息不全也直接派发。
-如果 dispatch_to_sandbox 返回 ok:false，如实简短告诉用户“后台处理暂时不可用”，并给出你力所能及的直接回答。
-收到 <sandbox-result> 通知时，简要向用户汇报结果（不要复述内部细节）。
-闲聊或询问在线状态直接一句话回复。绝不让用户在聊天里发密码，也绝不复述任何密钥。回复简短，用中文。`;
-
+// 提示词零写死（prompt-config S2.2/S2.3）：全部文案出自 persona_config——见下方 syncEngineCopy 与
+// Agent.instructions 装配；代码只做拼装。
 const dispatch_to_sandbox = createTool({
   id: 'dispatch_to_sandbox',
-  description: '把慢任务派发到后台执行，立即返回（不等待结果）；完成后会自动通知。',
+  description: '',
   inputSchema: z.object({ prompt: z.string(), runtime: z.enum(['cloud', 'local']).default('cloud') }),
   execute: async ({ prompt, runtime }, ctx: any) => {
     const threadId: string | undefined = ctx?.agent?.threadId ?? ctx?.threadId;
@@ -179,6 +173,23 @@ const userProfileExtractor = new Extractor({
   },
 });
 
+// 引擎/工具创建时读取的文案（S2.1 生效语义：冷启动）：可变引用传入，创建前的更新都能生效。
+const omObservationCfg = {
+  messageTokens: 2_000, bufferTokens: 0.25, bufferOnIdle: true, activateAfterIdle: 300_000, failurePolicy: 'continue',
+  instruction: '', extract: [userProfileExtractor],
+} as any;
+const omReflectionCfg = { observationTokens: 8_000, failurePolicy: 'continue', instruction: '' } as any;
+
+export async function syncEngineCopy(p?: { om_observe: string; om_reflect: string; tool_dispatch: string }) {
+  try {
+    const persona = p ?? (await getPersona(E.DB));
+    omObservationCfg.instruction = persona.om_observe;
+    omReflectionCfg.instruction = persona.om_reflect;
+    (dispatch_to_sandbox as any).description = persona.tool_dispatch;
+  } catch {}
+}
+syncEngineCopy();
+
 // 会话记忆：D1 + OM（Observer/Reflector 观测日志）+ Vectorize 语义召回；thread = roomId。
 // 不显式传 storage（构建期无 env 会炸 D1Store 初始化）；Memory 经 Mastra 注册拿到同一个 store。
 const memoryRef = new Memory({
@@ -189,28 +200,26 @@ const memoryRef = new Memory({
     observationalMemory: {
       model: 'deepseek/deepseek-chat',
       retrieval: { vector: true },
-      observation: {
-        messageTokens: 2_000,
-        bufferTokens: 0.25,
-        bufferOnIdle: true,
-        activateAfterIdle: 300_000,
-        failurePolicy: 'continue',
-        instruction: '你是秘书的记忆观察员。重点记录发言者的身份/称呼、偏好、决定、承诺与待办、在做的事、重要事实；忽略寒暄。',
-        extract: [userProfileExtractor],
-      },
-      reflection: {
-        observationTokens: 8_000,
-        failurePolicy: 'continue',
-        instruction: '压缩合并时优先保留主人的身份/称呼/偏好/决定/待办/事实，丢弃寒暄与重复。',
-      },
+      observation: omObservationCfg,
+      reflection: omReflectionCfg,
     },
   },
 });
 
+// 提示词装配（S2.3）：官方 DynamicArgument 函数槽位，每轮求值——文案全出自 persona_config。
 const orchestrator = new Agent({
   id: 'orchestrator',
   name: 'orchestrator',
-  instructions: INSTRUCTIONS,
+  instructions: async ({ requestContext }: any) => {
+    let threadId: string | undefined;
+    try {
+      const raw = requestContext?.getRaw?.(MASTRA_THREAD_ID_KEY) ?? requestContext?.get?.(MASTRA_THREAD_ID_KEY);
+      threadId = raw ? String(raw) : undefined;
+    } catch {}
+    const { d, ready } = db();
+    await ready;
+    return buildSecretaryPrompt(d, threadId, loadRoomProfileBlock);
+  },
   model: 'deepseek/deepseek-chat',
   tools: { dispatch_to_sandbox },
   memory: memoryRef,
@@ -395,7 +404,9 @@ export const mastra = new Mastra({
           const body: any = await c.req.json().catch(() => ({}));
           const { d, ready } = db();
           await ready;
-          return c.json({ persona: await updatePersona(d, body ?? {}, String(u.id)) });
+          const persona = await updatePersona(d, body ?? {}, String(u.id));
+          await syncEngineCopy(persona);
+          return c.json({ persona });
         },
       } as any),
       // L2 出站 PULL：原子领取一个 queued 任务 → working
@@ -449,35 +460,8 @@ export const mastra = new Mastra({
         chat: {
           stream: async (messages, opts) => {
             ensureOmInstalled();
-            // 上下文装配（S2.2/S2.3）：可配置人格块 + 主会话/共享房间语调 + 成员画像
-            let msgs: any[] = messages as any[];
-            try {
-              const threadId = String((opts as any)?.memory?.thread ?? '');
-              const parts: string[] = [];
-              try {
-                const p = await getPersona(E.DB);
-                parts.push(personaBlock(p));
-                // 语调：查询失败默认按房间语调（S2.3）
-                let isMain = false;
-                try {
-                  if (threadId) {
-                    const r: any = await E.DB.prepare('SELECT is_main FROM rooms WHERE id = ?').bind(threadId).first();
-                    isMain = !!r?.is_main;
-                  }
-                } catch {}
-                parts.push(
-                  isMain
-                    ? '【语调】这是与主人的一对一主会话：用亲密的管家伴侣口吻，自然用主人的称呼与偏好，可以有体己话。'
-                    : '【语调】这是共享房间：口吻得体、均衡、照顾在场成员，不要向其他成员炫耀对主人的私密了解。',
-                );
-                const block = await loadRoomProfileBlock(E.DB, threadId);
-                if (block) parts.push(block);
-              } catch (e: any) {
-                console.log('[persona] context build failed', String(e?.message ?? e).slice(0, 120));
-              }
-              if (parts.length) msgs = [{ role: 'system', content: parts.join('\n') }, ...msgs];
-            } catch {}
-            const out = await orchestrator.stream(msgs, opts as any);
+            // 提示词装配走 Agent.instructions（prompt-config S2.3）；这里只负责发消息与队列入队。
+            const out = await orchestrator.stream(messages as any, opts as any);
             // OM 周期走队列（S2.8）：流结束只入队，queue consumer 独立 invocation 跑 Observer/Reflector。
             // （fire-and-forget 在 Workers 会随响应结束被回收，实测观测永不落库。）
             const src = (out as any).textStream as ReadableStream<string>;

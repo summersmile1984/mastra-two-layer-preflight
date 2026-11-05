@@ -16,6 +16,12 @@ export type Persona = {
   role: string;
   style: string;
   main_room_name: string;
+  base_prompt: string;
+  tone_main: string;
+  tone_room: string;
+  om_observe: string;
+  om_reflect: string;
+  tool_dispatch: string;
   updated_at: number;
   updated_by: string | null;
 };
@@ -121,6 +127,12 @@ export async function updatePersona(patch: {
   role?: string;
   style?: string;
   main_room_name?: string;
+  base_prompt?: string;
+  tone_main?: string;
+  tone_room?: string;
+  om_observe?: string;
+  om_reflect?: string;
+  tool_dispatch?: string;
 }): Promise<Persona> {
   const r = await fetch('/settings/persona', jsonInit('PUT', patch));
   return (await j<{ persona: Persona }>(r)).persona;

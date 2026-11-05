@@ -13,6 +13,12 @@ export function SettingsPanel({
   const [role, setRole] = useState('');
   const [style, setStyle] = useState('');
   const [mainRoomName, setMainRoomName] = useState('');
+  const [basePrompt, setBasePrompt] = useState('');
+  const [toneMain, setToneMain] = useState('');
+  const [toneRoom, setToneRoom] = useState('');
+  const [omObserve, setOmObserve] = useState('');
+  const [omReflect, setOmReflect] = useState('');
+  const [toolDispatch, setToolDispatch] = useState('');
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
@@ -24,6 +30,12 @@ export function SettingsPanel({
         setRole(p.role);
         setStyle(p.style);
         setMainRoomName(p.main_room_name);
+        setBasePrompt(p.base_prompt ?? '');
+        setToneMain(p.tone_main ?? '');
+        setToneRoom(p.tone_room ?? '');
+        setOmObserve(p.om_observe ?? '');
+        setOmReflect(p.om_reflect ?? '');
+        setToolDispatch(p.tool_dispatch ?? '');
       })
       .catch(() => setErr('加载配置失败，请稍后重试'))
       .finally(() => setLoading(false));
@@ -34,7 +46,18 @@ export function SettingsPanel({
     setErr('');
     setBusy(true);
     try {
-      const p = await updatePersona({ name, role, style, main_room_name: mainRoomName });
+      const p = await updatePersona({
+        name,
+        role,
+        style,
+        main_room_name: mainRoomName,
+        base_prompt: basePrompt,
+        tone_main: toneMain,
+        tone_room: toneRoom,
+        om_observe: omObserve,
+        om_reflect: omReflect,
+        tool_dispatch: toolDispatch,
+      });
       onSuccess(p);
     } catch {
       setErr('保存失败，请稍后重试');
@@ -107,6 +130,96 @@ export function SettingsPanel({
                 onChange={(e) => setMainRoomName(e.target.value)}
                 placeholder="主会话显示名"
                 className="w-full rounded-xl border border-[var(--color-line)] bg-[var(--color-bg)] px-3 py-2 outline-none focus:border-[var(--color-acc)]"
+              />
+            </label>
+
+            <div className="mb-4 mt-6 border-t border-[var(--color-line)] pt-4">
+              <p className="text-sm font-semibold">提示词高级设置</p>
+              <p className="text-xs text-[var(--color-mut)]">控制秘书在不同场景下的提示词行为</p>
+            </div>
+
+            <label className="mb-3 block">
+              <span className="mb-1 flex items-baseline justify-between text-xs text-[var(--color-mut)]">
+                <span>基础提示词</span>
+                <span>{basePrompt.length}/4000</span>
+              </span>
+              <textarea
+                value={basePrompt}
+                maxLength={4000}
+                rows={6}
+                onChange={(e) => setBasePrompt(e.target.value)}
+                placeholder="每轮都生效的基础人设与规则"
+                className="w-full resize-none rounded-xl border border-[var(--color-line)] bg-[var(--color-bg)] px-3 py-2 outline-none focus:border-[var(--color-acc)]"
+              />
+            </label>
+            <label className="mb-3 block">
+              <span className="mb-1 flex items-baseline justify-between text-xs text-[var(--color-mut)]">
+                <span>主会话语调</span>
+                <span>{toneMain.length}/500</span>
+              </span>
+              <textarea
+                value={toneMain}
+                maxLength={500}
+                rows={2}
+                onChange={(e) => setToneMain(e.target.value)}
+                placeholder="主会话语调"
+                className="w-full resize-none rounded-xl border border-[var(--color-line)] bg-[var(--color-bg)] px-3 py-2 outline-none focus:border-[var(--color-acc)]"
+              />
+            </label>
+            <label className="mb-3 block">
+              <span className="mb-1 flex items-baseline justify-between text-xs text-[var(--color-mut)]">
+                <span>共享房间语调</span>
+                <span>{toneRoom.length}/500</span>
+              </span>
+              <textarea
+                value={toneRoom}
+                maxLength={500}
+                rows={2}
+                onChange={(e) => setToneRoom(e.target.value)}
+                placeholder="共享房间语调"
+                className="w-full resize-none rounded-xl border border-[var(--color-line)] bg-[var(--color-bg)] px-3 py-2 outline-none focus:border-[var(--color-acc)]"
+              />
+            </label>
+            <label className="mb-3 block">
+              <span className="mb-1 flex items-baseline justify-between text-xs text-[var(--color-mut)]">
+                <span>记忆观察员指令</span>
+                <span>{omObserve.length}/500</span>
+              </span>
+              <textarea
+                value={omObserve}
+                maxLength={500}
+                rows={2}
+                onChange={(e) => setOmObserve(e.target.value)}
+                placeholder="记忆观察员指令"
+                className="w-full resize-none rounded-xl border border-[var(--color-line)] bg-[var(--color-bg)] px-3 py-2 outline-none focus:border-[var(--color-acc)]"
+              />
+            </label>
+            <label className="mb-3 block">
+              <span className="mb-1 flex items-baseline justify-between text-xs text-[var(--color-mut)]">
+                <span>记忆压缩指令</span>
+                <span>{omReflect.length}/500</span>
+              </span>
+              <textarea
+                value={omReflect}
+                maxLength={500}
+                rows={2}
+                onChange={(e) => setOmReflect(e.target.value)}
+                placeholder="记忆压缩指令"
+                className="w-full resize-none rounded-xl border border-[var(--color-line)] bg-[var(--color-bg)] px-3 py-2 outline-none focus:border-[var(--color-acc)]"
+              />
+            </label>
+            <label className="mb-5 block">
+              <span className="mb-1 flex items-baseline justify-between text-xs text-[var(--color-mut)]">
+                <span>任务派发工具描述</span>
+                <span>{toolDispatch.length}/500</span>
+              </span>
+              <textarea
+                value={toolDispatch}
+                maxLength={500}
+                rows={2}
+                onChange={(e) => setToolDispatch(e.target.value)}
+                placeholder="任务派发工具描述"
+                className="w-full resize-none rounded-xl border border-[var(--color-line)] bg-[var(--color-bg)] px-3 py-2 outline-none focus:border-[var(--color-acc)]"
               />
             </label>
           </>

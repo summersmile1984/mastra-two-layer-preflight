@@ -1,10 +1,19 @@
-// 人格配置（persona-main-session spec S2.2）：人格是数据不是代码——name/role/style/main_room_name 存 D1，
-// 出厂种子只是默认值；装配 = 固定安全基座（index.ts 的 INSTRUCTIONS）+ 本模块读出的人格块 + 语调路由。
+// 人格与提示词配置（prompt-config spec S2.2/S2.3）：所有提示词文案都是数据——persona_config 单行配置，
+// 出厂种子只是默认值。装配唯一入口 buildSecretaryPrompt，经 Agent.instructions（官方 DynamicArgument
+// 函数，每轮求值）进入系统槽位；代码只做拼装，不含任何写死的提示词文案。
+// 生效语义：base_prompt/tone/profile 每轮生效；om_observe/om_reflect/tool_dispatch 为引擎/工具创建时
+// 读取（冷启动生效），见 S2.1。
 export type PersonaConfig = {
   name: string;
   role: string;
   style: string;
   main_room_name: string;
+  base_prompt: string;
+  tone_main: string;
+  tone_room: string;
+  om_observe: string;
+  om_reflect: string;
+  tool_dispatch: string;
   updated_at: number;
   updated_by: string | null;
 };
@@ -14,9 +23,24 @@ const SEED: Omit<PersonaConfig, 'updated_at' | 'updated_by'> = {
   role: '24 小时贴身秘书、管家与伴侣',
   style: '温和、可靠、尽责；记得主人的信息与偏好并自然引用（不要背诵）；「我来处理」式的担当，偶尔一句体己话；说中文，句子短。',
   main_room_name: '我的秘书',
+  base_prompt: `你是主人的私人助理，具体人设、称呼与语调以对话开头【你的身份】/【语调】块为准。必须立即回复用户，绝不等待长任务。
+慢任务（用户说“帮我…/跑…/分析…/测试…/生成…/构建…/部署…”，需要读写文件、跑命令、做网页、截图等）一律调用 dispatch_to_sandbox 派发，然后立刻用一句话告诉用户“我来处理，好了告诉你”，可以继续聊别的。
+对用户不可见的内部细节：绝不提 L2、harness、ACP、沙箱、运行时、任务 id、内部路径、A2A。只用自然语言说“我来处理/处理好了”。
+消息含“本地”或 route=local 时 runtime 选 local，否则选 cloud。不要反问澄清，信息不全也直接派发。
+如果 dispatch_to_sandbox 返回 ok:false，如实简短告诉用户“后台处理暂时不可用”，并给出你力所能及的直接回答。
+收到 <sandbox-result> 通知时，简要向用户汇报结果（不要复述内部细节）。
+闲聊或询问在线状态直接一句话回复。绝不让用户在聊天里发密码，也绝不复述任何密钥。回复简短，用中文。`,
+  tone_main: '【语调】这是与主人的一对一主会话：用亲密的管家伴侣口吻，自然用主人的称呼与偏好，可以有体己话。',
+  tone_room: '【语调】这是共享房间：口吻得体、均衡、照顾在场成员，不要向其他成员炫耀对主人的私密了解。',
+  om_observe: '你是秘书的记忆观察员。重点记录发言者的身份/称呼、偏好、决定、承诺与待办、在做的事、重要事实；忽略寒暄。',
+  om_reflect: '压缩合并时优先保留主人的身份/称呼/偏好/决定/待办/事实，丢弃寒暄与重复。',
+  tool_dispatch: '把慢任务派发到后台执行，立即返回（不等待结果）；完成后会自动通知。',
 };
 
-const LIMITS = { name: 200, role: 500, style: 1000, main_room_name: 50 };
+const LIMITS = {
+  name: 200, role: 500, style: 1000, main_room_name: 50,
+  base_prompt: 4000, tone_main: 500, tone_room: 500, om_observe: 500, om_reflect: 500, tool_dispatch: 500,
+};
 
 export async function ensurePersonaConfig(db: any): Promise<void> {
   await db
@@ -26,12 +50,25 @@ export async function ensurePersonaConfig(db: any): Promise<void> {
         main_room_name TEXT NOT NULL, updated_at INTEGER NOT NULL, updated_by TEXT)`,
     )
     .run();
+  // 0003 扩展列（幂等；旧库补列）
+  for (const col of ['base_prompt', 'tone_main', 'tone_room', 'om_observe', 'om_reflect', 'tool_dispatch']) {
+    await db.prepare(`ALTER TABLE persona_config ADD COLUMN ${col} TEXT`).run().catch(() => null);
+  }
   await db
     .prepare(
       `INSERT INTO persona_config (id, name, role, style, main_room_name, updated_at, updated_by)
        SELECT 1, ?, ?, ?, ?, ?, NULL WHERE NOT EXISTS (SELECT 1 FROM persona_config WHERE id = 1)`,
     )
     .bind(SEED.name, SEED.role, SEED.style, SEED.main_room_name, Date.now())
+    .run();
+  // 存量行补种子（NULL → 种子）
+  await db
+    .prepare(
+      `UPDATE persona_config SET base_prompt = COALESCE(base_prompt, ?), tone_main = COALESCE(tone_main, ?),
+       tone_room = COALESCE(tone_room, ?), om_observe = COALESCE(om_observe, ?), om_reflect = COALESCE(om_reflect, ?),
+       tool_dispatch = COALESCE(tool_dispatch, ?) WHERE id = 1`,
+    )
+    .bind(SEED.base_prompt, SEED.tone_main, SEED.tone_room, SEED.om_observe, SEED.om_reflect, SEED.tool_dispatch)
     .run();
 }
 
@@ -51,16 +88,18 @@ export async function getPersona(db: any, force = false): Promise<PersonaConfig>
     } catch {}
   }
   if (!row) {
-    // 失败回退出厂种子（S2.2），不让对话装配挂在配置读取上
     const seeded: PersonaConfig = { ...SEED, updated_at: 0, updated_by: null };
     cache = { persona: seeded, at: Date.now() };
     return seeded;
   }
+  const pick = (k: keyof typeof SEED) => {
+    const v = row[k];
+    return v === null || v === undefined || v === '' ? SEED[k] : String(v);
+  };
   const persona: PersonaConfig = {
-    name: String(row?.name ?? SEED.name),
-    role: String(row?.role ?? SEED.role),
-    style: String(row?.style ?? SEED.style),
-    main_room_name: String(row?.main_room_name ?? SEED.main_room_name),
+    name: pick('name'), role: pick('role'), style: pick('style'), main_room_name: pick('main_room_name'),
+    base_prompt: pick('base_prompt'), tone_main: pick('tone_main'), tone_room: pick('tone_room'),
+    om_observe: pick('om_observe'), om_reflect: pick('om_reflect'), tool_dispatch: pick('tool_dispatch'),
     updated_at: Number(row?.updated_at ?? 0),
     updated_by: row?.updated_by ? String(row.updated_by) : null,
   };
@@ -74,16 +113,13 @@ function clip(v: unknown, max: number): string | undefined {
   return s || undefined;
 }
 
+const UPDATABLE = Object.keys(LIMITS) as Array<keyof typeof LIMITS>;
+
 export async function updatePersona(db: any, patch: Record<string, unknown>, updatedBy: string): Promise<PersonaConfig> {
-  const next = {
-    name: clip(patch.name, LIMITS.name),
-    role: clip(patch.role, LIMITS.role),
-    style: clip(patch.style, LIMITS.style),
-    main_room_name: clip(patch.main_room_name, LIMITS.main_room_name),
-  };
   const fields: string[] = [];
   const args: unknown[] = [];
-  for (const [k, v] of Object.entries(next)) {
+  for (const k of UPDATABLE) {
+    const v = clip(patch[k], LIMITS[k]);
     if (v !== undefined) {
       fields.push(`${k} = ?`);
       args.push(v);
@@ -96,7 +132,31 @@ export async function updatePersona(db: any, patch: Record<string, unknown>, upd
   return getPersona(db, true);
 }
 
-/** 装配进上下文的人格块（S2.2/S2.3）。 */
+/** 装配进上下文的身份块（S2.3）。 */
 export function personaBlock(p: PersonaConfig): string {
   return `【你的身份】你是${p.name}，${p.role}。${p.style}`;
+}
+
+/**
+ * 每轮提示词装配（S2.3）：base_prompt + 身份 + 语调 + 成员画像。
+ * 经 Agent.instructions（DynamicArgument 函数）进入官方系统槽位；查询失败语调按房间。
+ */
+export async function buildSecretaryPrompt(db: any, threadId: string | undefined, loadProfileBlock: (db: any, threadId: string) => Promise<string>): Promise<string> {
+  const p = await getPersona(db);
+  const parts = [p.base_prompt, personaBlock(p)];
+  let isMain = false;
+  try {
+    if (threadId) {
+      const r: any = await db.prepare('SELECT is_main FROM rooms WHERE id = ?').bind(threadId).first();
+      isMain = !!r?.is_main;
+    }
+  } catch {}
+  parts.push(isMain ? p.tone_main : p.tone_room);
+  try {
+    if (threadId) {
+      const block = await loadProfileBlock(db, threadId);
+      if (block) parts.push(block);
+    }
+  } catch {}
+  return parts.join('\n');
 }
