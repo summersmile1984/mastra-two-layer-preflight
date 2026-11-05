@@ -41,6 +41,7 @@ import { ensureOmTable, installD1OmSupport } from './om-d1';
 import { VectorizeStore } from './vectorize-store';
 import { createWorkersAiEmbedder } from './workers-ai-embedder';
 import { ensureProfileTable, upsertProfile, resolveUserByName, loadRoomProfileBlock } from './profile';
+import { ensurePersonaConfig, getPersona, updatePersona, personaBlock } from './persona';
 
 const E = env as any;
 const L2_AGENT_ID = 'l2-worker';
@@ -71,12 +72,15 @@ function db() {
     .then(() => d.prepare('CREATE INDEX IF NOT EXISTS l2_tasks_thread ON l2_tasks(thread_id, updated_at)').run())
     .then(() => d.prepare('ALTER TABLE l2_tasks ADD COLUMN prompt TEXT').run().catch(() => null))
     .then(() => d.prepare('CREATE INDEX IF NOT EXISTS l2_tasks_state ON l2_tasks(state, created_at)').run())
+    .then(() => d.prepare('ALTER TABLE rooms ADD COLUMN is_main INTEGER NOT NULL DEFAULT 0').run().catch(() => null))
     .then(() => ensureOmTable(d))
-    .then(() => ensureProfileTable(d));
+    .then(() => ensureProfileTable(d))
+    .then(() => ensurePersonaConfig(d));
   return { d, ready: schemaReady };
 }
 
-const INSTRUCTIONS = `你是总管（orchestrator），必须立即回复用户，绝不等待长任务。
+// 固定基座（安全硬约束，不开放配置）；人设与语调由 persona_config 装配（spec S2.2，配置是数据不是代码）。
+const INSTRUCTIONS = `你是主人的私人助理，具体人设、称呼与语调以对话开头【你的身份】/【语调】块为准。必须立即回复用户，绝不等待长任务。
 慢任务（用户说“帮我…/跑…/分析…/测试…/生成…/构建…/部署…”，需要读写文件、跑命令、做网页、截图等）一律调用 dispatch_to_sandbox 派发，然后立刻用一句话告诉用户“我来处理，好了告诉你”，可以继续聊别的。
 对用户不可见的内部细节：绝不提 L2、harness、ACP、沙箱、运行时、任务 id、内部路径、A2A。只用自然语言说“我来处理/处理好了”。
 消息含“本地”或 route=local 时 runtime 选 local，否则选 cloud。不要反问澄清，信息不全也直接派发。
@@ -370,6 +374,30 @@ export const mastra = new Mastra({
             } as any),
           ]
         : []),
+      // 人格配置（S2.5）：登录可读写；persona 是数据不是代码
+      registerApiRoute('/settings/persona', {
+        method: 'GET',
+        requiresAuth: false,
+        handler: async (c: any) => {
+          const u = await getSessionUser(c.req.raw ?? { headers: c.req.headers }, E as any);
+          if (!u) return c.json({ error: 'unauthorized' }, 401);
+          const { d, ready } = db();
+          await ready;
+          return c.json({ persona: await getPersona(d) });
+        },
+      } as any),
+      registerApiRoute('/settings/persona', {
+        method: 'PUT',
+        requiresAuth: false,
+        handler: async (c: any) => {
+          const u = await getSessionUser(c.req.raw ?? { headers: c.req.headers }, E as any);
+          if (!u) return c.json({ error: 'unauthorized' }, 401);
+          const body: any = await c.req.json().catch(() => ({}));
+          const { d, ready } = db();
+          await ready;
+          return c.json({ persona: await updatePersona(d, body ?? {}, String(u.id)) });
+        },
+      } as any),
       // L2 出站 PULL：原子领取一个 queued 任务 → working
       registerApiRoute('/l2-claim', {
         method: 'POST',
@@ -421,17 +449,29 @@ export const mastra = new Mastra({
         chat: {
           stream: async (messages, opts) => {
             ensureOmInstalled();
-            // 注入成员画像（S2.3）：让回复自然体现「记得主人」
+            // 上下文装配（S2.2/S2.3）：可配置人格块 + 主会话/共享房间语调 + 成员画像
             let msgs: any[] = messages as any[];
             try {
               const threadId = String((opts as any)?.memory?.thread ?? '');
-              if (threadId) {
+              const parts: string[] = [];
+              try {
+                const p = await getPersona(E.DB);
+                parts.push(personaBlock(p));
+                if (threadId) {
+                  const r: any = await E.DB.prepare('SELECT is_main FROM rooms WHERE id = ?').bind(threadId).first();
+                  parts.push(
+                    r?.is_main
+                      ? '【语调】这是与主人的一对一主会话：用亲密的管家伴侣口吻，自然用主人的称呼与偏好，可以有体己话。'
+                      : '【语调】这是共享房间：口吻得体、均衡、照顾在场成员，不要向其他成员炫耀对主人的私密了解。',
+                  );
+                }
                 const block = await loadRoomProfileBlock(E.DB, threadId);
-                if (block) msgs = [{ role: 'system', content: block }, ...msgs];
+                if (block) parts.push(block);
+              } catch (e: any) {
+                console.log('[persona] context build failed', String(e?.message ?? e).slice(0, 120));
               }
-            } catch (e: any) {
-              console.log('[OM] profile inject failed', String(e?.message ?? e).slice(0, 120));
-            }
+              if (parts.length) msgs = [{ role: 'system', content: parts.join('\n') }, ...msgs];
+            } catch {}
             const out = await orchestrator.stream(msgs, opts as any);
             // OM 周期走队列（S2.8）：流结束只入队，queue consumer 独立 invocation 跑 Observer/Reflector。
             // （fire-and-forget 在 Workers 会随响应结束被回收，实测观测永不落库。）

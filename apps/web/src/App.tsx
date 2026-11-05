@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { Member, Room, User } from './lib/api';
+import type { Member, Persona, Room, User } from './lib/api';
 import { getSession, signOut, listRooms, createRoom, getRoom } from './lib/api';
 import { Login } from './components/Login';
 import { Sidebar } from './components/Sidebar';
 import { Chat } from './components/Chat';
+import { SettingsPanel } from './components/SettingsPanel';
 
 export function App() {
   const [me, setMe] = useState<User | null>(null);
@@ -12,6 +13,7 @@ export function App() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [roomName, setRoomName] = useState('');
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const refreshRooms = useCallback(async () => {
     try {
@@ -65,6 +67,13 @@ export function App() {
     setRoomName(r.name);
   }
 
+  function handlePersonaSaved(p: Persona) {
+    setRooms((rs) => rs.map((r) => (r.is_main === 1 ? { ...r, name: p.main_room_name } : r)));
+    const active = rooms.find((r) => r.id === activeId);
+    if (active?.is_main === 1) setRoomName(p.main_room_name);
+    setSettingsOpen(false);
+  }
+
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center text-[var(--color-mut)]">加载中…</div>
@@ -102,6 +111,7 @@ export function App() {
         }}
         onNewRoom={handleNewRoom}
         onSignOut={handleSignOut}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
       {activeId ? (
         <Chat
@@ -123,6 +133,12 @@ export function App() {
         <div className="flex flex-1 items-center justify-center text-[var(--color-mut)]">
           选择或新建一个房间
         </div>
+      )}
+      {settingsOpen && (
+        <SettingsPanel
+          onClose={() => setSettingsOpen(false)}
+          onSuccess={handlePersonaSaved}
+        />
       )}
     </div>
   );

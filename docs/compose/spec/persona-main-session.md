@@ -1,6 +1,6 @@
 ---
 feature: persona-main-session
-status: designed
+status: in-progress
 updated: 2026-11-05
 source: persona-main-session
 ---

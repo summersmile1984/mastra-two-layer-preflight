@@ -9,6 +9,15 @@ export type Room = {
   role?: string;
   last_message?: string | null;
   last_message_at?: number | null;
+  is_main?: number;
+};
+export type Persona = {
+  name: string;
+  role: string;
+  style: string;
+  main_room_name: string;
+  updated_at: number;
+  updated_by: string | null;
 };
 export type Member = { user_id: string; role: string; name?: string; email?: string };
 export type Message = {
@@ -98,6 +107,23 @@ export async function listMessages(roomId: string, after?: string): Promise<{ me
   const q = after ? `?after=${encodeURIComponent(after)}` : '';
   const r = await fetch(`/rooms/${roomId}/messages${q}`, { credentials: 'same-origin' });
   return j(r);
+}
+
+// ---------- 人格设置 ----------
+
+export async function getPersona(): Promise<Persona> {
+  const r = await fetch('/settings/persona', { credentials: 'same-origin' });
+  return (await j<{ persona: Persona }>(r)).persona;
+}
+
+export async function updatePersona(patch: {
+  name?: string;
+  role?: string;
+  style?: string;
+  main_room_name?: string;
+}): Promise<Persona> {
+  const r = await fetch('/settings/persona', jsonInit('PUT', patch));
+  return (await j<{ persona: Persona }>(r)).persona;
 }
 
 // ---------- 聊天流 ----------

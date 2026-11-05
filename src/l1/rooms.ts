@@ -20,6 +20,33 @@ export type RoomDeps = { E: RoomEnv; chat: ChatRunner; notifyRoom?: (roomId: str
 const now = () => Date.now();
 const rid = (p: string) => `${p}-${crypto.randomUUID()}`;
 
+/** 主会话供给（persona-main-session S2.1）：首次取房间列表时自动建，幂等（INSERT…WHERE NOT EXISTS）。 */
+async function ensureMainRoom(db: any, userId: string, mainName: string) {
+  try {
+    await db
+      .prepare(
+        `INSERT INTO rooms (id, name, created_by, created_at, updated_at, is_main)
+         SELECT ?, ?, ?, ?, ?, 1 WHERE NOT EXISTS (
+           SELECT 1 FROM rooms r JOIN room_members m ON m.room_id = r.id WHERE m.user_id = ? AND r.is_main = 1)`,
+      )
+      .bind(rid('room'), mainName, userId, now(), now(), userId)
+      .run();
+    const row: any = await db
+      .prepare('SELECT r.id FROM rooms r JOIN room_members m ON m.room_id = r.id WHERE m.user_id = ? AND r.is_main = 1 LIMIT 1')
+      .bind(userId)
+      .first();
+    if (row?.id) {
+      await db
+        .prepare(
+          `INSERT INTO room_members (room_id, user_id, role, joined_at, last_read_at)
+           SELECT ?, ?, 'owner', ?, ? WHERE NOT EXISTS (SELECT 1 FROM room_members WHERE room_id = ? AND user_id = ?)`,
+        )
+        .bind(row.id, userId, now(), now(), row.id, userId)
+        .run();
+    }
+  } catch {}
+}
+
 // ---------- D1 帮手 ----------
 
 async function isMember(d: any, roomId: string, userId: string): Promise<{ ok: boolean; role?: string }> {
@@ -79,12 +106,17 @@ function sseResponse(stream: ReadableStream): Response {
 // 房间列表
 async function listRooms(c: any, E: RoomEnv) {
   const user = await requireSession(c.req.raw ?? { headers: c.req.headers }, E);
+  try {
+    const { getPersona } = await import('../mastra/persona');
+    const p = await getPersona(E.DB);
+    await ensureMainRoom(E.DB, user.id, p.main_room_name);
+  } catch {}
   const { results } = await E.DB.prepare(
-    `SELECT r.id, r.name, r.created_by, r.updated_at, m.role, m.last_read_at,
+    `SELECT r.id, r.name, r.created_by, r.updated_at, r.is_main, m.role, m.last_read_at,
             (SELECT content FROM messages WHERE room_id=r.id ORDER BY created_at DESC LIMIT 1) AS last_message,
             (SELECT created_at FROM messages WHERE room_id=r.id ORDER BY created_at DESC LIMIT 1) AS last_message_at
      FROM rooms r JOIN room_members m ON m.room_id=r.id
-     WHERE m.user_id=? ORDER BY COALESCE((SELECT created_at FROM messages WHERE room_id=r.id ORDER BY created_at DESC LIMIT 1), r.updated_at) DESC`,
+     WHERE m.user_id=? ORDER BY r.is_main DESC, COALESCE((SELECT created_at FROM messages WHERE room_id=r.id ORDER BY created_at DESC LIMIT 1), r.updated_at) DESC`,
   )
     .bind(user.id)
     .all();
