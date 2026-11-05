@@ -3,7 +3,6 @@
 // 代码只做拼装，不含任何写死的提示词文案。
 // 生效语义：base_prompt/tone/profile 每轮生效；om_observe/om_reflect/tool_dispatch 为引擎/工具创建时
 // 读取（冷启动生效），见 S2.1。
-import { Memory } from '@mastra/memory';
 export type PersonaConfig = {
   name: string;
   role: string;
@@ -161,8 +160,10 @@ export async function buildThreadBlock(
     // 查询失败默认按房间语调（S2.3）
     const parts = [isMain ? p.tone_main : p.tone_room];
     if (threadId) {
-      const block = await loadProfileBlock(db, threadId);
-      if (block) parts.push(block);
+      try {
+        const block = await loadProfileBlock(db, threadId);
+        if (block) parts.push(block);
+      } catch {}
     }
     return parts.join('\n');
   } catch {

@@ -182,7 +182,7 @@ export function SettingsPanel({
             </label>
             <label className="mb-3 block">
               <span className="mb-1 flex items-baseline justify-between text-xs text-[var(--color-mut)]">
-                <span>记忆观察员指令</span>
+                <span>记忆观察员指令（引擎重启后生效）</span>
                 <span>{omObserve.length}/500</span>
               </span>
               <textarea
@@ -196,7 +196,7 @@ export function SettingsPanel({
             </label>
             <label className="mb-3 block">
               <span className="mb-1 flex items-baseline justify-between text-xs text-[var(--color-mut)]">
-                <span>记忆压缩指令</span>
+                <span>记忆压缩指令（引擎重启后生效）</span>
                 <span>{omReflect.length}/500</span>
               </span>
               <textarea
@@ -210,7 +210,7 @@ export function SettingsPanel({
             </label>
             <label className="mb-5 block">
               <span className="mb-1 flex items-baseline justify-between text-xs text-[var(--color-mut)]">
-                <span>任务派发工具描述</span>
+                <span>任务派发工具描述（即改即生效）</span>
                 <span>{toolDispatch.length}/500</span>
               </span>
               <textarea

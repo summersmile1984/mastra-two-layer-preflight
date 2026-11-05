@@ -184,6 +184,11 @@ export async function syncEngineCopy(p?: { om_observe: string; om_reflect: strin
     const persona = p ?? (await getPersona(E.DB));
     omObservationCfg.instruction = persona.om_observe;
     omReflectionCfg.instruction = persona.om_reflect;
+    // Memory 构造时把 options 拷进 threadConfig——必须同步补实例上的这份（引擎初始化读它）；
+    // 引擎创建后改这里不再热生效（引擎快照），冷启动兜底（S2.1 生效语义）。
+    const tc: any = (memoryRef as any)?.threadConfig;
+    if (tc?.observationalMemory?.observation) tc.observationalMemory.observation.instruction = persona.om_observe;
+    if (tc?.observationalMemory?.reflection) tc.observationalMemory.reflection.instruction = persona.om_reflect;
     (dispatch_to_sandbox as any).description = persona.tool_dispatch;
   } catch {}
 }
@@ -466,6 +471,7 @@ export const mastra = new Mastra({
         chat: {
           stream: async (messages, opts) => {
             ensureOmInstalled();
+            await syncEngineCopy();
             // 提示词装配（S2.3）：基座+身份走 Agent.instructions；语调+画像走消息级 system 前置。
             const msgs = await withThreadBlock(messages as any[], String((opts as any)?.memory?.thread ?? '') || undefined);
             const out = await orchestrator.stream(msgs, opts as any);
@@ -509,6 +515,7 @@ const omQueueHandler = async (batch: any) => {
     }
     try {
       ensureOmInstalled();
+      await syncEngineCopy();
       // 构建器把 new Mastra(...) 改写成惰性工厂，fetch 里才实例化；queue 调用必须自己触发，
       // 否则 Memory 没注册、omEngine 解析为 null。
       const m: any = mastra;

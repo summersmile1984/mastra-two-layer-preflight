@@ -9,11 +9,11 @@ source: prompt-config
 
 ## Report
 
-**What was built** — 提示词文案零写死 + Mastra Memory 对齐：①`persona_config` 扩展 6 字段（base_prompt/tone_main/tone_room/om_observe/om_reflect/tool_dispatch，种子=原文案，迁移 0003 + 幂等回填）；②装配分两路走官方槽位——**基座+身份**经 `Agent.instructions` 的 `DynamicArgument` 函数（每轮求值），**语调+画像**经消息级 system 前置（`buildThreadBlock`，chat 与后台汇报 compose 共用）；③OM 观察/反思指令与派发工具描述为可变配置引用（引擎/工具创建时生效，PUT 后同步）；④SPA 设置面板新增 6 项（含字数统计）。
+**What was built** — 提示词文案零写死 + Mastra Memory 对齐：①`persona_config` 扩展 6 字段（base_prompt/tone_main/tone_room/om_observe/om_reflect/tool_dispatch，种子=原文案，迁移 0003 + 幂等回填）；②装配分两路走官方槽位——**基座+身份**经 `Agent.instructions` 的 `DynamicArgument` 函数（每轮求值），**语调+画像**经消息级 system 前置（`buildThreadBlock`，chat 与后台汇报 compose 共用）；③OM 观察/反思指令与派发工具描述为可变配置引用（`syncEngineCopy` 同步 `memoryRef.threadConfig` 与工具描述；工具描述每模型调用重读即热生效，OM 指令为引擎初始化语义——引擎已建则等下个 isolate）；④SPA 设置面板新增 6 项（含字数统计）。
 
 **Alignment findings (S2.1)** — `Agent.instructions` 函数槽位实测 `requestContext` **不含 threadId**（`{}`，探针实证）；`Memory.getSystemMessage`（官方每轮系统槽位，签名带 threadId）在启用 OM 的 processor 管道里**产物被丢弃**（`injectObservationContextMessages` 消费的是观测步 ctx，实测模型收不到）——故 thread 相关块走消息级 system 前置（persona-main-session 已验证可达模型）。存储面（D1Store/OM 适配/Extractor/Vectorize）本就走官方扩展面，不动。
 
-**Verification** — 生产 E2E（真 D1/DeepSeek，DoH 直连）两轮 7/8：`base-live-main`/`base-live-room`（口头禅标记即改即生效）、`tone-main-live`/`tone-room-live`（（主甲）/（房乙）按 is_main 路由）、`seed-fields`、`main-room` 全 PASS；单测性实验 2/2 PASS（主/房语调后缀各归各位）。`config-readback` 两轮 FAIL 为 **harness 断言字符串陈旧**（仍查旧标记「主标记甲」，实值已生效——回复文本即证）；已修断言后的确认轮被 Workers 免费版 1102 风暴持续阻断（health 1/6 通过，API 100328 确认免费版无法调 CPU 限额），属既有平台约束。`npm run build --prefix apps/web` PASS。
+**Verification** — 生产 E2E（真 D1/DeepSeek，DoH 直连）最终 8/8 + 回归 10/10（persona 全套：主会话自动/幂等/改名/鉴权/双语调零回归）：`base-live-main`/`base-live-room`（口头禅标记即改即生效）、`tone-main-live`/`tone-room-live`（（主甲）/（房乙）按 is_main 路由）、`seed-fields`、`main-room` 全 PASS；单测性实验 2/2 PASS（主/房语调后缀各归各位）。`config-readback` 修复断言后 PASS。**T3 证据**：tool_dispatch 配置暗号【工具乙】被模型原样说出（热生效）；om_observe 配置「绝不记录咖啡/月球」后观测只剩靛蓝事实（引擎初始化语义，threadConfig 补丁后实证）。注：升级 Workers Paid 后 `limits.cpu_ms: 30000` 已显式锁定，1102 抖动消失。`npm run build --prefix apps/web` PASS。
 
 ## [S1] Problem
 
@@ -33,9 +33,11 @@ persona-main-session 把人设四项做成了配置，但仍有写死在代码�
 
 新增字段（种子 = 现文案，行为零回归）：`base_prompt`（原 INSTRUCTIONS 全文）、`tone_main`、`tone_room`、`om_observe`、`om_reflect`。字段上限：base_prompt 4000、tone_* 500、om_* 500。`GET/PUT /settings/persona` 全量暴露；SPA「秘书设置」面板加对应输入项（base_prompt 用 textarea）。
 
-### S2.3 装配（src/mastra/persona.ts）
+### S2.3 装配（最终设计）
 
-`buildSecretaryPrompt({ threadId })`：`base_prompt` + 【你的身份】(name/role/style) + 【语调】(is_main ? tone_main : tone_room，查询失败默认 tone_room) + 【成员画像】(om_profiles 注入，沿用 loadRoomProfileBlock)。`Agent.instructions` 传 `async ({ requestContext }) => buildSecretaryPrompt(...)`（读 requestContext 的 thread key）；**删除 chat.stream 的手拼 system 消息**（保留入队逻辑与画像注入改为由 instructions 承担）。
+- **基座 + 身份**：`Agent.instructions` 为 `DynamicArgument` 异步函数（官方槽位，每轮求值），返回 `base_prompt + 【你的身份】`。
+- **语调 + 画像**：`buildThreadBlock`（persona.ts）按 `rooms.is_main` 选 tone_main/tone_room（查询失败默认房间语调）+ 成员画像块，经**消息级 system 前置**注入（`withThreadBlock`，chat.stream 与 compose 汇报共用）。
+- 该分工是探针实测后的修订：`instructions` 函数的 requestContext 不含 threadId；`Memory.getSystemMessage` 在 OM processor 管道里产物被丢弃（见 Journey）。
 
 ### S2.4 保留的非提示词防护（执行层，不动）
 

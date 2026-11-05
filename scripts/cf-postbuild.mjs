@@ -48,6 +48,8 @@ w.main = './worker-entry.mjs';
 w.durable_objects = { bindings: [{ name: 'ROOM_DO', class_name: 'RoomDO' }] };
 w.migrations = [{ tag: 'v1', new_sqlite_classes: ['RoomDO'] }];
 w.ai = { binding: 'AI' };
+// Paid 套餐显式锁 30s CPU（免费版曾拒绝此配置，API 100328）
+w.limits = { cpu_ms: 30000 };
 w.vectorize = [
   { binding: 'VECTORIZE', index_name: 'om-memory' },
   { binding: 'VECTORIZE_OBS', index_name: 'om-memory-obs' },
