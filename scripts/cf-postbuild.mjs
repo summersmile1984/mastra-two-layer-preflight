@@ -25,15 +25,19 @@ writeFileSync(
     "// 生成文件（cf-postbuild.mjs）：DO 类必须从 wrangler main 模块导出。",
     "import base from './index.mjs';",
     "export { RoomDO } from './room-do.js';",
-    "// OM 队列消费者（S2.8）：queue 挂到 default 导出对象（Queues API 只认 export default.queue）+ 具名导出；",
+    "// OM 队列消费者（S2.8）与定时任务 tick（S2.1）：挂到 default 导出对象 + 具名导出；",
     "// 逻辑经 globalThis 注册表转发（mastra build 只保留 mastra/default 导出）。",
     "async function queue(batch, env, ctx) {",
     "  const handler = (globalThis).__omQueueHandler;",
     "  if (!handler) { for (const m of batch?.messages ?? []) { try { m.retry(); } catch {} } return; }",
     "  await handler(batch);",
     "}",
-    "export { queue };",
-    "export default { ...base, queue };",
+    "async function scheduled(event, env, ctx) {",
+    "  const handler = (globalThis).__schedulesTick;",
+    "  if (handler) await handler();",
+    "}",
+    "export { queue, scheduled };",
+    "export default { ...base, queue, scheduled };",
     '',
   ].join('\n'),
 );
@@ -52,6 +56,9 @@ w.ai = { binding: 'AI' };
 w.limits = { cpu_ms: 30000 };
 // Workers AI provider（Mastra provider-registry）鉴权：CLOUDFLARE_API_KEY secret + 账号 ID
 w.vars = { ...(w.vars ?? {}), CLOUDFLARE_ACCOUNT_ID: '8a1dca996a18a595f0b931f106539248' };
+// Secrets Store（schedules-secrets S2.3）：vault 密钥托管
+w.vars.VAULT_STORE_ID = '450ea560af844a8d856197dd7ffa64ca';
+w.secrets_store = [{ binding: 'VAULT_STORE', store_id: '450ea560af844a8d856197dd7ffa64ca' }];
 w.vectorize = [
   { binding: 'VECTORIZE', index_name: 'om-memory' },
   { binding: 'VECTORIZE_OBS', index_name: 'om-memory-obs' },
@@ -61,5 +68,7 @@ w.queues = {
   producers: [{ queue: 'om-cycles', binding: 'OM_QUEUE' }],
   consumers: [{ queue: 'om-cycles', max_retries: 10, retry_delay: 30 }],
 };
+// 定时任务（schedules-secrets S2.1）：每分钟 tick
+w.triggers = { crons: ['* * * * *'] };
 writeFileSync(f, JSON.stringify(w, null, 2));
 console.log('[cf-postbuild] assets -> ./static, main -> ./worker-entry.mjs, DO ROOM_DO, AI + VECTORIZE + queues(om-cycles)');

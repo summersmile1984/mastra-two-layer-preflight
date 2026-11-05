@@ -43,6 +43,11 @@ import { createWorkersAiEmbedder } from './workers-ai-embedder';
 import { ensureProfileTable, upsertProfile, resolveUserByName, loadRoomProfileBlock } from './profile';
 import { ensurePersonaConfig, getPersona, updatePersona, personaBlock, buildThreadBlock, buildModelId, SEED_MODEL_ID } from './persona';
 import { indexThreadMessages } from './index-messages';
+import { ensureVaultTable, createVaultEntry, listVaultEntries, deleteVaultEntry, vaultOut, purgeExpiredVault } from './vault';
+import {
+  listSchedules, getSchedule, createSchedule, updateSchedule, deleteSchedule,
+  listRuns, dueSchedules, markRun, advanceSchedule,
+} from '../l1/schedules';
 // provider-registry 的 package exports 不放行子路径——相对路径导入让打包器内联（运行时无解析）
 import providerRegistry from '../../node_modules/@mastra/core/dist/provider-registry.json';
 
@@ -78,7 +83,24 @@ function db() {
     .then(() => d.prepare('ALTER TABLE rooms ADD COLUMN is_main INTEGER NOT NULL DEFAULT 0').run().catch(() => null))
     .then(() => ensureOmTable(d))
     .then(() => ensureProfileTable(d))
-    .then(() => ensurePersonaConfig(d));
+    .then(() => ensurePersonaConfig(d))
+    .then(() => ensureVaultTable(d))
+    .then(() => d.prepare(`CREATE TABLE IF NOT EXISTS user_permission_rules (
+      user_id TEXT NOT NULL, category_or_tool TEXT NOT NULL,
+      policy TEXT NOT NULL CHECK (policy IN ('allow','ask','deny')), updated_at INTEGER NOT NULL,
+      PRIMARY KEY (user_id, category_or_tool))`).run())
+    .then(() => d.prepare(`CREATE TABLE IF NOT EXISTS user_settings (
+      user_id TEXT PRIMARY KEY, auto_review INTEGER NOT NULL DEFAULT 1, updated_at INTEGER NOT NULL)`).run())
+    .then(() => d.prepare(`CREATE TABLE IF NOT EXISTS schedules (
+      id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, cron TEXT NOT NULL,
+      timezone TEXT NOT NULL DEFAULT 'Asia/Shanghai', prompt TEXT NOT NULL,
+      target_type TEXT NOT NULL CHECK (target_type IN ('room')), target_id TEXT,
+      enabled INTEGER NOT NULL DEFAULT 1, next_run_at INTEGER, last_run_at INTEGER,
+      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`).run())
+    .then(() => d.prepare(`CREATE TABLE IF NOT EXISTS schedule_runs (
+      id TEXT PRIMARY KEY, schedule_id TEXT NOT NULL, user_id TEXT NOT NULL,
+      status TEXT NOT NULL, detail TEXT, created_at INTEGER NOT NULL)`).run())
+    .then(() => d.prepare('CREATE INDEX IF NOT EXISTS schedules_due ON schedules(enabled, next_run_at)').run());
   return { d, ready: schemaReady };
 }
 
@@ -446,6 +468,154 @@ export const mastra = new Mastra({
           });
         },
       } as any),
+      // 定时任务（schedules-secrets S2.1）：cron 例程，执行走 Workers cron tick
+      registerApiRoute('/schedules', {
+        method: 'GET',
+        requiresAuth: false,
+        handler: async (c: any) => {
+          const u = await getSessionUser(c.req.raw ?? { headers: c.req.headers }, E as any);
+          if (!u) return c.json({ error: 'unauthorized' }, 401);
+          const { d, ready } = db();
+          await ready;
+          return c.json({ schedules: await listSchedules(d, u.id) });
+        },
+      } as any),
+      registerApiRoute('/schedules', {
+        method: 'POST',
+        requiresAuth: false,
+        handler: async (c: any) => {
+          const u = await getSessionUser(c.req.raw ?? { headers: c.req.headers }, E as any);
+          if (!u) return c.json({ error: 'unauthorized' }, 401);
+          const body: any = await c.req.json().catch(() => ({}));
+          const { d, ready } = db();
+          await ready;
+          try {
+            return c.json({ schedule: await createSchedule(d, u.id, body) }, 201);
+          } catch (e: any) {
+            return c.json({ error: String(e?.message ?? e).slice(0, 160) }, 400);
+          }
+        },
+      } as any),
+      registerApiRoute('/schedules/:id', {
+        method: 'PUT',
+        requiresAuth: false,
+        handler: async (c: any) => {
+          const u = await getSessionUser(c.req.raw ?? { headers: c.req.headers }, E as any);
+          if (!u) return c.json({ error: 'unauthorized' }, 401);
+          const body: any = await c.req.json().catch(() => ({}));
+          const { d, ready } = db();
+          await ready;
+          try {
+            const schedule = await updateSchedule(d, u.id, String(c.req.param('id') ?? ''), body);
+            return schedule ? c.json({ schedule }) : c.json({ error: 'not found' }, 404);
+          } catch (e: any) {
+            return c.json({ error: String(e?.message ?? e).slice(0, 160) }, 400);
+          }
+        },
+      } as any),
+      registerApiRoute('/schedules/:id', {
+        method: 'DELETE',
+        requiresAuth: false,
+        handler: async (c: any) => {
+          const u = await getSessionUser(c.req.raw ?? { headers: c.req.headers }, E as any);
+          if (!u) return c.json({ error: 'unauthorized' }, 401);
+          const { d, ready } = db();
+          await ready;
+          const okDel = await deleteSchedule(d, u.id, String(c.req.param('id') ?? ''));
+          return c.json(okDel ? { ok: true } : { error: 'not found' }, okDel ? 200 : 404);
+        },
+      } as any),
+      registerApiRoute('/schedules/:id/runs', {
+        method: 'GET',
+        requiresAuth: false,
+        handler: async (c: any) => {
+          const u = await getSessionUser(c.req.raw ?? { headers: c.req.headers }, E as any);
+          if (!u) return c.json({ error: 'unauthorized' }, 401);
+          const { d, ready } = db();
+          await ready;
+          return c.json({ runs: await listRuns(d, u.id, String(c.req.param('id') ?? '')) });
+        },
+      } as any),
+      // 权限数据面（schedules-secrets S2.2）：allow/ask/deny 规则 + 用户设置；消费方（HITL）后续接入
+      registerApiRoute('/permissions', {
+        method: 'GET',
+        requiresAuth: false,
+        handler: async (c: any) => {
+          const u = await getSessionUser(c.req.raw ?? { headers: c.req.headers }, E as any);
+          if (!u) return c.json({ error: 'unauthorized' }, 401);
+          const { d, ready } = db();
+          await ready;
+          const rules = (await d.prepare('SELECT category_or_tool, policy, updated_at FROM user_permission_rules WHERE user_id=?').bind(u.id).all()).results ?? [];
+          const settings: any = await d.prepare('SELECT auto_review, updated_at FROM user_settings WHERE user_id=?').bind(u.id).first();
+          return c.json({ rules, settings: settings ?? { auto_review: 1 } });
+        },
+      } as any),
+      registerApiRoute('/permissions', {
+        method: 'PUT',
+        requiresAuth: false,
+        handler: async (c: any) => {
+          const u = await getSessionUser(c.req.raw ?? { headers: c.req.headers }, E as any);
+          if (!u) return c.json({ error: 'unauthorized' }, 401);
+          const body: any = await c.req.json().catch(() => ({}));
+          const { d, ready } = db();
+          await ready;
+          if (Array.isArray(body?.rules)) {
+            for (const r of body.rules) {
+              const cat = String(r?.category_or_tool ?? '').trim().slice(0, 100);
+              const policy = String(r?.policy ?? '');
+              if (!cat || !['allow', 'ask', 'deny'].includes(policy)) continue;
+              await d.prepare(`INSERT INTO user_permission_rules (user_id, category_or_tool, policy, updated_at) VALUES (?,?,?,?)
+                ON CONFLICT(user_id, category_or_tool) DO UPDATE SET policy=excluded.policy, updated_at=excluded.updated_at`)
+                .bind(u.id, cat, policy, Date.now()).run();
+            }
+          }
+          if (body?.auto_review !== undefined) {
+            await d.prepare(`INSERT INTO user_settings (user_id, auto_review, updated_at) VALUES (?,?,?)
+              ON CONFLICT(user_id) DO UPDATE SET auto_review=excluded.auto_review, updated_at=excluded.updated_at`)
+              .bind(u.id, body.auto_review ? 1 : 0, Date.now()).run();
+          }
+          const rules = (await d.prepare('SELECT category_or_tool, policy, updated_at FROM user_permission_rules WHERE user_id=?').bind(u.id).all()).results ?? [];
+          return c.json({ rules });
+        },
+      } as any),
+      // 密钥保管（schedules-secrets S2.3）：Secrets Store 托管，D1 只存元数据，不回密文
+      registerApiRoute('/vault', {
+        method: 'GET',
+        requiresAuth: false,
+        handler: async (c: any) => {
+          const u = await getSessionUser(c.req.raw ?? { headers: c.req.headers }, E as any);
+          if (!u) return c.json({ error: 'unauthorized' }, 401);
+          const { d, ready } = db();
+          await ready;
+          return c.json({ entries: (await listVaultEntries(d, u.id)).map(vaultOut) });
+        },
+      } as any),
+      registerApiRoute('/vault', {
+        method: 'POST',
+        requiresAuth: false,
+        handler: async (c: any) => {
+          const u = await getSessionUser(c.req.raw ?? { headers: c.req.headers }, E as any);
+          if (!u) return c.json({ error: 'unauthorized' }, 401);
+          const body: any = await c.req.json().catch(() => ({}));
+          const { d, ready } = db();
+          await ready;
+          const r = await createVaultEntry(E, d, u.id, body, String(u.id));
+          if ((r as any).error) return c.json({ error: (r as any).error }, 400);
+          return c.json({ entry: vaultOut(r) }, 201);
+        },
+      } as any),
+      registerApiRoute('/vault/:id', {
+        method: 'DELETE',
+        requiresAuth: false,
+        handler: async (c: any) => {
+          const u = await getSessionUser(c.req.raw ?? { headers: c.req.headers }, E as any);
+          if (!u) return c.json({ error: 'unauthorized' }, 401);
+          const { d, ready } = db();
+          await ready;
+          const r = await deleteVaultEntry(E, d, u.id, String(c.req.param('id') ?? ''));
+          return c.json(r, r.ok ? 200 : 404);
+        },
+      } as any),
       // 人格配置（S2.5）：登录可读写；persona 是数据不是代码
       registerApiRoute('/settings/persona', {
         method: 'GET',
@@ -619,3 +789,48 @@ const omQueueHandler = async (batch: any) => {
   }
 };
 (globalThis as any).__omQueueHandler = omQueueHandler;
+
+// 定时任务执行（schedules-secrets S2.1）：Workers cron 每分钟 tick → 扫到期例程 →
+// 以 prompt 驱动秘书向目标房间发言（复用 compose 落消息 + RoomDO WS 通知）→ 记 runs、推 next_run_at。
+const schedulesTick = async () => {
+  try {
+    ensureOmInstalled();
+    await syncEngineCopy();
+    // scheduled 路径不经过 fetch 的 mastra() 工厂——同队列消费者的接线：显式注册 Memory（否则 generate 抛 storage provider）
+    const m0: any = mastra;
+    const inst0: any = typeof m0 === 'function' ? m0() : m0;
+    try {
+      (memoryRef as any).__registerMastra?.(inst0);
+      const st0: any = inst0?.getStorage?.();
+      if (st0 && !(memoryRef as any).hasOwnStorage) (memoryRef as any).setStorage?.(st0);
+    } catch {}
+    const { d, ready } = db();
+    await ready;
+    try { await purgeExpiredVault(E, d); } catch {}
+    const due = await dueSchedules(d, Date.now());
+    for (const rec of due as any[]) {
+      try {
+        const threadId = String(rec.target_id ?? '');
+        const prompt = `【定时任务：${rec.name}】${rec.prompt}`;
+        const msgs = await withThreadBlock([{ role: 'user', content: prompt }], threadId);
+        const res: any = await orchestrator.generate(msgs, {
+          memory: { thread: threadId, resource: `room:${threadId}` }, maxSteps: 1,
+        } as any);
+        const reply = String(res?.text ?? '').slice(0, 8000);
+        const content = reply || `定时任务「${rec.name}」执行完毕。`;
+        const msgId = `msg-${crypto.randomUUID()}`;
+        await d.prepare('INSERT INTO messages (id,room_id,user_id,role,content,created_at) VALUES (?,?,?,?,?,?)')
+          .bind(msgId, threadId, null, 'assistant', content, Date.now()).run();
+        await d.prepare('UPDATE rooms SET updated_at=? WHERE id=?').bind(Date.now(), threadId).run();
+        try { await notifyRoom(threadId, { kind: 'message', messageId: msgId }); } catch {}
+        await markRun(d, { scheduleId: rec.id, userId: rec.user_id, status: 'success', detail: content.slice(0, 200) });
+      } catch (e: any) {
+        try { await markRun(d, { scheduleId: rec.id, userId: rec.user_id, status: 'failed', detail: String(e?.message ?? e).slice(0, 200) }); } catch {}
+      }
+      try { await advanceSchedule(d, rec.id, Date.now()); } catch {}
+    }
+  } catch (e: any) {
+    console.log('[schedules] tick failed', String(e?.message ?? e).slice(0, 160));
+  }
+};
+(globalThis as any).__schedulesTick = schedulesTick;
