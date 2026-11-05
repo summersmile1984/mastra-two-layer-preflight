@@ -14,6 +14,7 @@ export type PersonaConfig = {
   om_observe: string;
   om_reflect: string;
   tool_dispatch: string;
+  tool_schedule: string;
   model_gateway: string;
   model_name: string;
   model_effort: string;
@@ -38,6 +39,7 @@ const SEED: Omit<PersonaConfig, 'updated_at' | 'updated_by'> = {
   om_observe: '你是秘书的记忆观察员。重点记录发言者的身份/称呼、偏好、决定、承诺与待办、在做的事、重要事实；忽略寒暄。',
   om_reflect: '压缩合并时优先保留主人的身份/称呼/偏好/决定/待办/事实，丢弃寒暄与重复。',
   tool_dispatch: '把慢任务派发到后台执行，立即返回（不等待结果）；完成后会自动通知。',
+  tool_schedule: '创建定时例程（create_schedule）。当主人用自然语言提到定时安排（如「每天早上8点给我打招呼」）时调用：name=例程名，prompt=到点要执行的内容，cron=5 字段（分 时 日 月 周，时区默认 Asia/Shanghai）。常用换算：每天 8 点=0 8 * * *；每小时=0 * * * *；工作日 9 点=0 9 * * 1-5；每周一 9 点=0 9 * * 1；每分钟=* * * * *。也可用预设 every_minute/hourly/daily_9/weekdays_9/weekly_mon_9。管理用 list_schedules / delete_schedule。',
   model_gateway: 'deepseek',
   model_name: 'deepseek-chat',
   model_effort: 'provider-default',
@@ -45,7 +47,7 @@ const SEED: Omit<PersonaConfig, 'updated_at' | 'updated_by'> = {
 
 const LIMITS = {
   name: 200, role: 500, style: 1000, main_room_name: 50,
-  base_prompt: 4000, tone_main: 500, tone_room: 500, om_observe: 500, om_reflect: 500, tool_dispatch: 500,
+  base_prompt: 4000, tone_main: 500, tone_room: 500, om_observe: 500, om_reflect: 500, tool_dispatch: 500, tool_schedule: 1000,
   model_gateway: 100, model_name: 200, model_effort: 20,
 };
 
@@ -58,7 +60,7 @@ export async function ensurePersonaConfig(db: any): Promise<void> {
     )
     .run();
   // 0003/0004 扩展列（幂等；旧库补列）
-  for (const col of ['base_prompt', 'tone_main', 'tone_room', 'om_observe', 'om_reflect', 'tool_dispatch', 'model_gateway', 'model_name', 'model_effort']) {
+  for (const col of ['base_prompt', 'tone_main', 'tone_room', 'om_observe', 'om_reflect', 'tool_dispatch', 'tool_schedule', 'model_gateway', 'model_name', 'model_effort']) {
     await db.prepare(`ALTER TABLE persona_config ADD COLUMN ${col} TEXT`).run().catch(() => null);
   }
   await db
@@ -73,10 +75,10 @@ export async function ensurePersonaConfig(db: any): Promise<void> {
     .prepare(
       `UPDATE persona_config SET base_prompt = COALESCE(base_prompt, ?), tone_main = COALESCE(tone_main, ?),
        tone_room = COALESCE(tone_room, ?), om_observe = COALESCE(om_observe, ?), om_reflect = COALESCE(om_reflect, ?),
-       tool_dispatch = COALESCE(tool_dispatch, ?), model_gateway = COALESCE(model_gateway, ?),
+       tool_dispatch = COALESCE(tool_dispatch, ?), tool_schedule = COALESCE(tool_schedule, ?), model_gateway = COALESCE(model_gateway, ?),
        model_name = COALESCE(model_name, ?), model_effort = COALESCE(model_effort, ?) WHERE id = 1`,
     )
-    .bind(SEED.base_prompt, SEED.tone_main, SEED.tone_room, SEED.om_observe, SEED.om_reflect, SEED.tool_dispatch,
+    .bind(SEED.base_prompt, SEED.tone_main, SEED.tone_room, SEED.om_observe, SEED.om_reflect, SEED.tool_dispatch, SEED.tool_schedule,
       SEED.model_gateway, SEED.model_name, SEED.model_effort)
     .run();
 }
@@ -108,7 +110,7 @@ export async function getPersona(db: any, force = false): Promise<PersonaConfig>
   const persona: PersonaConfig = {
     name: pick('name'), role: pick('role'), style: pick('style'), main_room_name: pick('main_room_name'),
     base_prompt: pick('base_prompt'), tone_main: pick('tone_main'), tone_room: pick('tone_room'),
-    om_observe: pick('om_observe'), om_reflect: pick('om_reflect'), tool_dispatch: pick('tool_dispatch'),
+    om_observe: pick('om_observe'), om_reflect: pick('om_reflect'), tool_dispatch: pick('tool_dispatch'), tool_schedule: pick('tool_schedule'),
     model_gateway: pick('model_gateway'), model_name: pick('model_name'), model_effort: pick('model_effort'),
     updated_at: Number(row?.updated_at ?? 0),
     updated_by: row?.updated_by ? String(row.updated_by) : null,

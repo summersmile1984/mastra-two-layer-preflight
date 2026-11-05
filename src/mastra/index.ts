@@ -151,6 +151,70 @@ const dispatch_to_sandbox = createTool({
   },
 });
 
+// 定时例程工具（schedule-tools）：秘书从对话建档「每天早上8点…」；描述文案走 persona_config.tool_schedule
+const create_schedule_tool = createTool({
+  id: 'create_schedule',
+  description: '',
+  inputSchema: z.object({
+    name: z.string().describe('例程名称'),
+    prompt: z.string().describe('到点后执行/说的话'),
+    cron: z.string().describe('5 字段 cron（分 时 日 月 周）或预设名'),
+    timezone: z.string().optional().describe('IANA 时区，默认 Asia/Shanghai'),
+    target_id: z.string().optional().describe('目标房间 id，缺省当前会话房间'),
+  }),
+  execute: async ({ name, prompt, cron, timezone, target_id }: any, ctx: any) => {
+    try {
+      const { d, ready } = db();
+      await ready;
+      const threadId = String(target_id || ctx?.agent?.threadId || '');
+      if (!threadId) return { ok: false, reason: '缺少目标房间' };
+      const owner: any = await d.prepare('SELECT created_by FROM rooms WHERE id=?').bind(threadId).first();
+      const schedule = await createSchedule(d, String(owner?.created_by ?? ''), {
+        name, prompt, cron, timezone, target_type: 'room', target_id: threadId,
+      });
+      return { ok: true, schedule };
+    } catch (e: any) {
+      return { ok: false, reason: String(e?.message ?? e).slice(0, 160) };
+    }
+  },
+});
+
+const list_schedules_tool = createTool({
+  id: 'list_schedules',
+  description: '查看全部定时例程（名称、cron、下次执行时间、启用状态）。',
+  inputSchema: z.object({}),
+  execute: async (_args: any, ctx: any) => {
+    try {
+      const { d, ready } = db();
+      await ready;
+      const threadId = String(ctx?.agent?.threadId ?? '');
+      const owner: any = threadId ? await d.prepare('SELECT created_by FROM rooms WHERE id=?').bind(threadId).first() : null;
+      const schedules = await listSchedules(d, String(owner?.created_by ?? ''));
+      return { ok: true, schedules };
+    } catch (e: any) {
+      return { ok: false, reason: String(e?.message ?? e).slice(0, 160) };
+    }
+  },
+});
+
+const delete_schedule_tool = createTool({
+  id: 'delete_schedule',
+  description: '删除一个定时例程（先用 list_schedules 查 id）。',
+  inputSchema: z.object({ id: z.string().describe('例程 id') }),
+  execute: async ({ id }: any, ctx: any) => {
+    try {
+      const { d, ready } = db();
+      await ready;
+      const threadId = String(ctx?.agent?.threadId ?? '');
+      const owner: any = threadId ? await d.prepare('SELECT created_by FROM rooms WHERE id=?').bind(threadId).first() : null;
+      const okDel = await deleteSchedule(d, String(owner?.created_by ?? ''), String(id));
+      return okDel ? { ok: true } : { ok: false, reason: '没找到这个例程' };
+    } catch (e: any) {
+      return { ok: false, reason: String(e?.message ?? e).slice(0, 160) };
+    }
+  },
+});
+
 // D1 存储单例：Mastra 与 Memory 共用；OM 扩展面装饰到 memory domain（observational-memory S2.1）。
 // 绑定（DB 等）在请求期才注入 env——store 必须懒建（构建器会把 new Mastra(...) 包成惰性工厂，请求期才调用）。
 let _store: any = null;
@@ -224,6 +288,7 @@ export async function syncEngineCopy(p?: { om_observe: string; om_reflect: strin
     }
     if (tc?.observationalMemory) tc.observationalMemory.model = buildModelId(persona);
     (dispatch_to_sandbox as any).description = persona.tool_dispatch;
+    (create_schedule_tool as any).description = persona.tool_schedule;
   } catch {}
 }
 
@@ -277,7 +342,7 @@ const orchestrator = new Agent({
     const p = await getPersona(E.DB);
     return { reasoning: p.model_effort } as any;
   },
-  tools: { dispatch_to_sandbox },
+  tools: { dispatch_to_sandbox, create_schedule: create_schedule_tool, list_schedules: list_schedules_tool, delete_schedule: delete_schedule_tool },
   memory: memoryRef,
 });
 
