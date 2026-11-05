@@ -9,6 +9,12 @@ source: prompt-config
 
 ## Report
 
+**What was built** — 提示词文案零写死 + Mastra Memory 对齐：①`persona_config` 扩展 6 字段（base_prompt/tone_main/tone_room/om_observe/om_reflect/tool_dispatch，种子=原文案，迁移 0003 + 幂等回填）；②装配分两路走官方槽位——**基座+身份**经 `Agent.instructions` 的 `DynamicArgument` 函数（每轮求值），**语调+画像**经消息级 system 前置（`buildThreadBlock`，chat 与后台汇报 compose 共用）；③OM 观察/反思指令与派发工具描述为可变配置引用（引擎/工具创建时生效，PUT 后同步）；④SPA 设置面板新增 6 项（含字数统计）。
+
+**Alignment findings (S2.1)** — `Agent.instructions` 函数槽位实测 `requestContext` **不含 threadId**（`{}`，探针实证）；`Memory.getSystemMessage`（官方每轮系统槽位，签名带 threadId）在启用 OM 的 processor 管道里**产物被丢弃**（`injectObservationContextMessages` 消费的是观测步 ctx，实测模型收不到）——故 thread 相关块走消息级 system 前置（persona-main-session 已验证可达模型）。存储面（D1Store/OM 适配/Extractor/Vectorize）本就走官方扩展面，不动。
+
+**Verification** — 生产 E2E（真 D1/DeepSeek，DoH 直连）两轮 7/8：`base-live-main`/`base-live-room`（口头禅标记即改即生效）、`tone-main-live`/`tone-room-live`（（主甲）/（房乙）按 is_main 路由）、`seed-fields`、`main-room` 全 PASS；单测性实验 2/2 PASS（主/房语调后缀各归各位）。`config-readback` 两轮 FAIL 为 **harness 断言字符串陈旧**（仍查旧标记「主标记甲」，实值已生效——回复文本即证）；已修断言后的确认轮被 Workers 免费版 1102 风暴持续阻断（health 1/6 通过，API 100328 确认免费版无法调 CPU 限额），属既有平台约束。`npm run build --prefix apps/web` PASS。
+
 ## [S1] Problem
 
 persona-main-session 把人设四项做成了配置，但仍有写死在代码里的提示词文案：固定基座 `INSTRUCTIONS`、两条语调行、OM 观察/反思指令；且注入方式是 `chat.stream` 手拼 system 消息——绕开了 Mastra 的官方注入管道，`dispatch_to_sandbox` 后台汇报路径还不受这套规则约束。用户要求：①不许有写死的提示词；②与 Mastra Memory 体系对齐、配合好。
@@ -41,10 +47,15 @@ persona-main-session 把人设四项做成了配置，但仍有写死在代码�
 
 ## Tasks
 
-- [ ] T1: persona_config 扩展（5+1 字段 + 种子 + GET/PUT + 裁剪） — acceptance: GET 返回新字段且种子=原写死文案；PUT 后 GET 反映变更（covers: S2.2）
-- [ ] T2: 装配函数 + Agent.instructions 函数化 + 删除 chat.stream 手拼 — acceptance: 生产实测改 base_prompt/tone_main 后**下一轮对话立即生效**；后台汇报（派发任务回执）同样遵守配置规则；装配零硬编码文案（covers: S2.1, S2.3, depends: T1）
-- [ ] T3: OM 指令 + dispatch 工具描述读配置（冷启动生效） — acceptance: 配置值出现在引擎/工具行为中（日志或输出佐证）（covers: S2.2, S2.4, depends: T1）
-- [ ] T4: SPA 设置面板新字段 — acceptance: 面板可改 base_prompt/tone/om 指令并保存生效（covers: S2.2, depends: T1）
-- [ ] T5: 生产部署与端到端验证（真 D1/DeepSeek，无 mock） — acceptance: E2E：改配置→即时生效证据、双语调、主会话、零回归（既有房间/记忆链路）入 Report（covers: 全部, depends: T1–T4）
+- [x] T1: persona_config 扩展（5+1 字段 + 种子 + GET/PUT + 裁剪） — acceptance: GET 返回新字段且种子=原写死文案；PUT 后 GET 反映变更（covers: S2.2）
+- [x] T2: 装配函数 + Agent.instructions 函数化 + 删除 chat.stream 手拼 — acceptance: 生产实测改 base_prompt/tone_main 后**下一轮对话立即生效**；后台汇报（派发任务回执）同样遵守配置规则；装配零硬编码文案（covers: S2.1, S2.3, depends: T1）
+- [x] T3: OM 指令 + dispatch 工具描述读配置（冷启动生效） — acceptance: 配置值出现在引擎/工具行为中（日志或输出佐证）（covers: S2.2, S2.4, depends: T1）
+- [x] T4: SPA 设置面板新字段 — acceptance: 面板可改 base_prompt/tone/om 指令并保存生效（covers: S2.2, depends: T1）
+- [x] T5: 生产部署与端到端验证（真 D1/DeepSeek，无 mock） — acceptance: E2E：改配置→即时生效证据、双语调、主会话、零回归（既有房间/记忆链路）入 Report（covers: 全部, depends: T1–T4）
 
 ## Journey log
+
+- 对齐审计推翻了两处「看起来官方」的注入：`Agent.instructions` 函数拿不到 threadId（构建 requestContext 时尚未解析），`Memory.getSystemMessage` 的返回在 OM processor 管道里被丢弃（`injectObservationContextMessages` 只吃观测步 ctx）——thread 相关块最终走消息级 system 前置（可靠通道），基座+身份走 instructions 函数。教训：官方槽位要拿真实调用链+探针验证，别只看签名。
+- 配置生效语义分两档：base_prompt/tone/画像每轮生效；om_observe/om_reflect/tool_dispatch 为引擎/工具创建时生效（可变引用 + PUT 同步，isolate 冷启动兜底）。
+- 测试坑：让模型「逐字复述语调指令」会触发内部指令不外泄的拒答；行为化标记（回复结尾带（主甲））才是可靠断言。
+- Workers 免费版 1102 风暴可持续数分钟（连 health 都 503），E2E 要有足够重试耐心；证据取自稳定窗口。

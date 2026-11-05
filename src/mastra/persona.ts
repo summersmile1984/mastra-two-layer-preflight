@@ -1,8 +1,9 @@
 // 人格与提示词配置（prompt-config spec S2.2/S2.3）：所有提示词文案都是数据——persona_config 单行配置，
-// 出厂种子只是默认值。装配唯一入口 buildSecretaryPrompt，经 Agent.instructions（官方 DynamicArgument
-// 函数，每轮求值）进入系统槽位；代码只做拼装，不含任何写死的提示词文案。
+// 出厂种子只是默认值。装配经 Agent.instructions + 消息级 system 前置（见 buildThreadBlock）；
+// 代码只做拼装，不含任何写死的提示词文案。
 // 生效语义：base_prompt/tone/profile 每轮生效；om_observe/om_reflect/tool_dispatch 为引擎/工具创建时
 // 读取（冷启动生效），见 S2.1。
+import { Memory } from '@mastra/memory';
 export type PersonaConfig = {
   name: string;
   role: string;
@@ -138,25 +139,33 @@ export function personaBlock(p: PersonaConfig): string {
 }
 
 /**
- * 每轮提示词装配（S2.3）：base_prompt + 身份 + 语调 + 成员画像。
- * 经 Agent.instructions（DynamicArgument 函数）进入官方系统槽位；查询失败语调按房间。
+ * thread 作用域块（S2.3）：语调 + 成员画像。base_prompt/身份走 Agent.instructions 函数；
+ * 本块经消息级 system 前置注入（chat 与后台汇报共用）。
+ * 注：官方 Memory.getSystemMessage 槽位在启用 OM 的 processor 管道里产物会被丢弃
+ * （@mastra/memory 1.40 实测），故 thread 相关块走消息级前置——实测可达模型。
  */
-export async function buildSecretaryPrompt(db: any, threadId: string | undefined, loadProfileBlock: (db: any, threadId: string) => Promise<string>): Promise<string> {
-  const p = await getPersona(db);
-  const parts = [p.base_prompt, personaBlock(p)];
-  let isMain = false;
+export async function buildThreadBlock(
+  db: any,
+  threadId: string | undefined,
+  loadProfileBlock: (db: any, threadId: string) => Promise<string>,
+): Promise<string | null> {
   try {
-    if (threadId) {
-      const r: any = await db.prepare('SELECT is_main FROM rooms WHERE id = ?').bind(threadId).first();
-      isMain = !!r?.is_main;
-    }
-  } catch {}
-  parts.push(isMain ? p.tone_main : p.tone_room);
-  try {
+    const p = await getPersona(db);
+    let isMain = false;
+    try {
+      if (threadId) {
+        const r: any = await db.prepare('SELECT is_main FROM rooms WHERE id = ?').bind(threadId).first();
+        isMain = !!r?.is_main;
+      }
+    } catch {}
+    // 查询失败默认按房间语调（S2.3）
+    const parts = [isMain ? p.tone_main : p.tone_room];
     if (threadId) {
       const block = await loadProfileBlock(db, threadId);
       if (block) parts.push(block);
     }
-  } catch {}
-  return parts.join('\n');
+    return parts.join('\n');
+  } catch {
+    return null;
+  }
 }

@@ -41,8 +41,7 @@ import { ensureOmTable, installD1OmSupport } from './om-d1';
 import { VectorizeStore } from './vectorize-store';
 import { createWorkersAiEmbedder } from './workers-ai-embedder';
 import { ensureProfileTable, upsertProfile, resolveUserByName, loadRoomProfileBlock } from './profile';
-import { ensurePersonaConfig, getPersona, updatePersona, personaBlock, buildSecretaryPrompt } from './persona';
-import { MASTRA_THREAD_ID_KEY } from '@mastra/core/request-context';
+import { ensurePersonaConfig, getPersona, updatePersona, personaBlock, buildThreadBlock } from './persona';
 
 const E = env as any;
 const L2_AGENT_ID = 'l2-worker';
@@ -206,19 +205,25 @@ const memoryRef = new Memory({
   },
 });
 
-// 提示词装配（S2.3）：官方 DynamicArgument 函数槽位，每轮求值——文案全出自 persona_config。
+/** thread 作用域提示词块（语调+画像）：chat 与后台汇报共用的消息级 system 前置（S2.3）。 */
+async function withThreadBlock(messages: any[], threadId: string | undefined): Promise<any[]> {
+  try {
+    const block = await buildThreadBlock(E.DB, threadId, loadRoomProfileBlock);
+    if (block) return [{ role: 'system', content: block }, ...messages];
+  } catch (e: any) {
+    console.log('[persona] thread block failed', String(e?.message ?? e).slice(0, 120));
+  }
+  return messages;
+}
+
+// 提示词装配（S2.3）：基座+身份走 Agent.instructions（官方函数槽位）；语调+画像走
+// 消息级 system 前置（withThreadBlock，chat 与后台汇报共用）。
 const orchestrator = new Agent({
   id: 'orchestrator',
   name: 'orchestrator',
-  instructions: async ({ requestContext }: any) => {
-    let threadId: string | undefined;
-    try {
-      const raw = requestContext?.getRaw?.(MASTRA_THREAD_ID_KEY) ?? requestContext?.get?.(MASTRA_THREAD_ID_KEY);
-      threadId = raw ? String(raw) : undefined;
-    } catch {}
-    const { d, ready } = db();
-    await ready;
-    return buildSecretaryPrompt(d, threadId, loadRoomProfileBlock);
+  instructions: async () => {
+    const p = await getPersona(E.DB);
+    return `${p.base_prompt}\n${personaBlock(p)}`;
   },
   model: 'deepseek/deepseek-chat',
   tools: { dispatch_to_sandbox },
@@ -257,8 +262,9 @@ const finalizeTask = async (taskId: string, state: string, text: string, src: st
   const compose = (async () => {
     let reply = '';
     try {
+      const composePrompt = `<sandbox-result state="${state}">${text.slice(0, 8000)}</sandbox-result>\n（这是后台任务的结果通知，不是用户消息；请直接向用户简要汇报）`;
       const res: any = await orchestrator.generate(
-        `<sandbox-result state="${state}">${text.slice(0, 8000)}</sandbox-result>\n（这是后台任务的结果通知，不是用户消息；请直接向用户简要汇报）`,
+        await withThreadBlock([{ role: 'user', content: composePrompt }], rec.thread_id),
         { memory: { thread: rec.thread_id, resource: rec.resource_id ?? rec.thread_id }, maxSteps: 1 } as any);
       reply = String(res?.text ?? '').slice(0, 8000);
       await d.prepare('UPDATE l2_tasks SET reply=?, updated_at=? WHERE task_id=?').bind(reply, Date.now(), taskId).run();
@@ -460,8 +466,9 @@ export const mastra = new Mastra({
         chat: {
           stream: async (messages, opts) => {
             ensureOmInstalled();
-            // 提示词装配走 Agent.instructions（prompt-config S2.3）；这里只负责发消息与队列入队。
-            const out = await orchestrator.stream(messages as any, opts as any);
+            // 提示词装配（S2.3）：基座+身份走 Agent.instructions；语调+画像走消息级 system 前置。
+            const msgs = await withThreadBlock(messages as any[], String((opts as any)?.memory?.thread ?? '') || undefined);
+            const out = await orchestrator.stream(msgs, opts as any);
             // OM 周期走队列（S2.8）：流结束只入队，queue consumer 独立 invocation 跑 Observer/Reflector。
             // （fire-and-forget 在 Workers 会随响应结束被回收，实测观测永不落库。）
             const src = (out as any).textStream as ReadableStream<string>;
