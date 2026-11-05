@@ -1,8 +1,8 @@
 // 人格与提示词配置（prompt-config spec S2.2/S2.3）：所有提示词文案都是数据——persona_config 单行配置，
 // 出厂种子只是默认值。装配经 Agent.instructions + 消息级 system 前置（见 buildThreadBlock）；
 // 代码只做拼装，不含任何写死的提示词文案。
-// 生效语义：base_prompt/tone/profile 每轮生效；om_observe/om_reflect/tool_dispatch 为引擎/工具创建时
-// 读取（冷启动生效），见 S2.1。
+// 生效语义：base_prompt/tone/profile 每轮生效；tool_dispatch 热生效；om_observe/om_reflect 为
+// 引擎初始化语义（见 syncEngineCopy 与 S2.1）。
 export type PersonaConfig = {
   name: string;
   role: string;

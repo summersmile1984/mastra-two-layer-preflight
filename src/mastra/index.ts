@@ -192,7 +192,6 @@ export async function syncEngineCopy(p?: { om_observe: string; om_reflect: strin
     (dispatch_to_sandbox as any).description = persona.tool_dispatch;
   } catch {}
 }
-syncEngineCopy();
 
 // 会话记忆：D1 + OM（Observer/Reflector 观测日志）+ Vectorize 语义召回；thread = roomId。
 // 不显式传 storage（构建期无 env 会炸 D1Store 初始化）；Memory 经 Mastra 注册拿到同一个 store。
@@ -209,6 +208,8 @@ const memoryRef = new Memory({
     },
   },
 });
+// memoryRef 就绪后做首次同步（模块加载时尚未声明，不能提前调）
+syncEngineCopy();
 
 /** thread 作用域提示词块（语调+画像）：chat 与后台汇报共用的消息级 system 前置（S2.3）。 */
 async function withThreadBlock(messages: any[], threadId: string | undefined): Promise<any[]> {

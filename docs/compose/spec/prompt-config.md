@@ -1,6 +1,6 @@
 ---
 feature: prompt-config
-status: in-progress
+status: delivered
 updated: 2026-11-05
 source: prompt-config
 ---
@@ -58,6 +58,6 @@ persona-main-session 把人设四项做成了配置，但仍有写死在代码�
 ## Journey log
 
 - 对齐审计推翻了两处「看起来官方」的注入：`Agent.instructions` 函数拿不到 threadId（构建 requestContext 时尚未解析），`Memory.getSystemMessage` 的返回在 OM processor 管道里被丢弃（`injectObservationContextMessages` 只吃观测步 ctx）——thread 相关块最终走消息级 system 前置（可靠通道），基座+身份走 instructions 函数。教训：官方槽位要拿真实调用链+探针验证，别只看签名。
-- 配置生效语义分两档：base_prompt/tone/画像每轮生效；om_observe/om_reflect/tool_dispatch 为引擎/工具创建时生效（可变引用 + PUT 同步，isolate 冷启动兜底）。
+- 配置生效语义分两档：base_prompt/tone/画像每轮生效；tool_dispatch 热生效（每模型调用重读）；om_observe/om_reflect 为引擎初始化语义（syncEngineCopy 补 memoryRef.threadConfig，引擎已建则等下个 isolate）。
 - 测试坑：让模型「逐字复述语调指令」会触发内部指令不外泄的拒答；行为化标记（回复结尾带（主甲））才是可靠断言。
 - Workers 免费版 1102 风暴可持续数分钟（连 health 都 503），E2E 要有足够重试耐心；证据取自稳定窗口。
