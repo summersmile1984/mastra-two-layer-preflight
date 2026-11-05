@@ -40,10 +40,10 @@ source: recall-model
 
 ## Tasks
 
-- [x] T\1: 开启 semanticRecall（Memory options） — acceptance: 对话后 `memory_messages_1024` 经 REST 查询出现向量（covers: S2.2-1）
-- [x] T\1: Vectorize 元数据索引补齐 observed_at — acceptance: 时间窗过滤查询非空（covers: S2.2-2）
-- [x] T\1: 行为化验收（事实沉底 + 改述语义提问命中） — acceptance: 超出 lastMessages 窗口的事实被正确答出；无记忆时明确说不记得（covers: S2.3, depends: T1, T2）
-- [x] T\1: 生产验证与定稿 — acceptance: E2E 证据入 Report，既有链路零回归（covers: 全部, depends: T1–T3）
+- [x] T1: 开启 semanticRecall（Memory options） — acceptance: 对话后 `memory_messages_1024` 经 REST 查询出现向量（covers: S2.2-1）
+- [x] T2: Vectorize 元数据索引补齐 observed_at — acceptance: 时间窗过滤查询非空（covers: S2.2-2）
+- [x] T3: 行为化验收（事实沉底 + 改述语义提问命中） — acceptance: 超出 lastMessages 窗口的事实被正确答出；无记忆时明确说不记得（covers: S2.3, depends: T1, T2）
+- [x] T4: 生产验证与定稿 — acceptance: E2E 证据入 Report，既有链路零回归（covers: 全部, depends: T1–T3）
 
 ## Journey log
 

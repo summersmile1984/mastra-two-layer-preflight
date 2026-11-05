@@ -41,10 +41,10 @@ source: recall-model
 
 ## Tasks
 
-- [x] T\1: persona_config 三字段 + 装配（Agent.model/modelSettings 均 DynamicArgument 函数，OM 同源） — acceptance: 种子下行为零回归；PUT 换模型后下一轮对话即走新模型（covers: S2.1）
-- [x] T\1: GET /settings/models 目录接口（provider-registry 运行时读取） — acceptance: 返回三家网关的模型清单 + effort 枚举，无硬编码列表（covers: S2.2）
-- [x] T\1: SPA 三级级联 — acceptance: 选 cloudflare-workers-ai → 模型列表过滤为 @cf/*；保存后 GET 反映（covers: S2.3, depends: T2）
-- [x] T\1: 生产验证与定稿 — acceptance: 切到 Workers AI（如 @cf/deepseek-ai/deepseek-v4-flash-0731 + effort=high）对话正常、切回 deepseek 正常；E2E 证据入 Report（covers: 全部, depends: T1–T3）
+- [x] T1: persona_config 三字段 + 装配（Agent.model/modelSettings 均 DynamicArgument 函数，OM 同源） — acceptance: 种子下行为零回归；PUT 换模型后下一轮对话即走新模型（covers: S2.1）
+- [x] T2: GET /settings/models 目录接口 — acceptance: 返回三家网关（registry 两家 + mastra 运行时 fetchProviders）模型清单 + effort 枚举，无硬编码模型列表（covers: S2.2）
+- [x] T3: SPA 三级级联 — acceptance: 选 cloudflare-workers-ai → 模型列表过滤为 @cf/*；保存后 GET 反映（covers: S2.3, depends: T2）
+- [x] T4: 生产验证与定稿 — acceptance: 切到 Workers AI（如 @cf/deepseek-ai/deepseek-v4-flash-0731 + effort=high）对话正常、切回 deepseek 正常；E2E 证据入 Report（covers: 全部, depends: T1–T3）
 
 ## Journey log
 
