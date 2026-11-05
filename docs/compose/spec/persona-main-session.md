@@ -41,11 +41,11 @@ L1 已有长期记忆（observational-memory），但它的「脸」仍是任务
 - 共享房间：得体、均衡、照顾在场成员，不向其他成员炫耀对主人的私密了解。
 - 查 `is_main` 用单行 D1 查询（按 roomId，失败默认按房间语调）。
 
-### S2.5 人格配置接口
+### S2.5 人格配置接口与设置面板
 
 - `GET /settings/persona` → 当前配置（登录可读）。
 - `PUT /settings/persona` → 局部更新 name/role/style/main_room_name（登录可写；记录 updated_by；字段长度上限 200/500/1000/50）。
-- SPA 配置面板**不做**（Out of Scope，后续可加）。
+- SPA 设置面板：侧栏底部「设置」入口；表单四项（名称/角色/语调要点/主会话名）+ 保存回显，走上述 API。
 
 ### S2.4 SPA：主会话置顶
 
@@ -62,7 +62,7 @@ L1 已有长期记忆（observational-memory），但它的「脸」仍是任务
 - [ ] T1: 主会话供给（`is_main` 列 + `ensureMainRoom` + `listRooms` 返回字段） — acceptance: 新用户首次 GET /rooms 自动出现主会话；同用户再取不重复创建；rooms 列表含 is_main 标记（covers: S2.1）
 - [ ] T2: 人格配置面（`persona_config` 表 + 出厂种子 + 读取缓存 + GET/PUT /settings/persona） — acceptance: GET 返回种子配置；PUT 改 name/style 后 GET 反映变更且 updated_by 记录；越长字段被裁剪/拒收（covers: S2.2, S2.5）
 - [ ] T3: 提示词装配（固定基座 + 可配置人格块 + 主/房间语调路由） — acceptance: 生产实测改 persona_config.name 后对话自我称呼随之变化；主会话与共享房间口吻差异明显；硬约束不回退（派发纪律/内部术语/密钥）（covers: S2.2, S2.3, depends: T2）
-- [ ] T4: SPA 侧栏置顶主会话 — acceptance: 截图可见主会话分组置顶（名随配置）、选中进入聊天正常（covers: S2.4, depends: T1）
+- [ ] T4: SPA：主会话置顶 + 人格设置面板 — acceptance: 截图可见主会话分组置顶（名随配置）；侧栏「设置」打开表单改 name 保存后 GET 反映变更，主会话显示名随之变化（covers: S2.4, S2.5, depends: T1, T2）
 - [ ] T5: 生产部署与端到端验证（真 D1/DeepSeek，无 mock） — acceptance: 部署 mastra-l1 后新账号走查：登录→主会话自动出现→改人格配置生效→两语境对话→截图/E2E 证据入 Report（covers: S2.1–S2.5, depends: T1–T4）
 
 ## Journey log
