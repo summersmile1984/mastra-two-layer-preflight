@@ -45,8 +45,16 @@ export async function getPersona(db: any, force = false): Promise<PersonaConfig>
     row = await db.prepare('SELECT * FROM persona_config WHERE id = 1').first();
   } catch {}
   if (!row) {
-    await ensurePersonaConfig(db);
-    row = await db.prepare('SELECT * FROM persona_config WHERE id = 1').first();
+    try {
+      await ensurePersonaConfig(db);
+      row = await db.prepare('SELECT * FROM persona_config WHERE id = 1').first();
+    } catch {}
+  }
+  if (!row) {
+    // 失败回退出厂种子（S2.2），不让对话装配挂在配置读取上
+    const seeded: PersonaConfig = { ...SEED, updated_at: 0, updated_by: null };
+    cache = { persona: seeded, at: Date.now() };
+    return seeded;
   }
   const persona: PersonaConfig = {
     name: String(row?.name ?? SEED.name),

@@ -22,7 +22,7 @@ function queryOne(boot, name, type) {
         servername: boot.servername,
         method: 'GET',
         path,
-        headers: { host: boot.servername, accept: boot.servername === 'dns.google' ? 'application/dns-json' : 'application/dns-json' },
+        headers: { host: boot.servername, accept: 'application/dns-json' },
         timeout: 4000,
       },
       (res) => {
@@ -69,15 +69,18 @@ export function dohLookup(hostname, options, callback) {
     .catch((e) => cb(e));
 }
 
-// 预加载模式：改写整个 node 进程的 DNS 解析（wrangler / mastra / 任意 node 工具）
-dns.lookup = dohLookup;
-if (dns.promises) {
-  dns.promises.lookup = (hostname, options) =>
-    new Promise((resolve, reject) => {
-      dohLookup(hostname, options || {}, (err, address, family) => {
-        if (err) return reject(err);
-        if (options && typeof options === 'object' && options.all) return resolve(address);
-        resolve({ address, family });
+// 预加载模式（显式开关，避免普通 import 也改写全局 DNS）：
+//   DOH_GLOBAL_LOOKUP=1 NODE_OPTIONS=--import=<本文件绝对路径> <cmd>
+if (process.env.DOH_GLOBAL_LOOKUP === '1') {
+  dns.lookup = dohLookup;
+  if (dns.promises) {
+    dns.promises.lookup = (hostname, options) =>
+      new Promise((resolve, reject) => {
+        dohLookup(hostname, options || {}, (err, address, family) => {
+          if (err) return reject(err);
+          if (options && typeof options === 'object' && options.all) return resolve(address);
+          resolve({ address, family });
+        });
       });
-    });
+  }
 }

@@ -1,6 +1,6 @@
 ---
 feature: persona-main-session
-status: in-progress
+status: delivered
 updated: 2026-11-05
 source: persona-main-session
 ---
@@ -8,6 +8,10 @@ source: persona-main-session
 # 拟人人格 + 主会话——秘书的脸与专属对话
 
 ## Report
+
+**What was built** — ①主会话：`rooms.is_main` 列（迁移 0002 + 运行时幂等 ALTER），`ensureMainRoom` 在首次 `GET /rooms` 自动建「主会话」（名随 `persona_config.main_room_name`，幂等、仅本人、显示名随配置同步），`listRooms` 返回 `is_main` 且主会话排序置顶；②可配置人格：D1 `persona_config` 单行（name/role/style/main_room_name + updated_by）+ 出厂种子 + 30s 缓存 + `GET/PUT /settings/persona`（登录可读写、字段裁剪 200/500/1000/50）——人格是数据不是代码，安全硬约束（派发纪律/内部术语禁提/密钥禁碰）保留在固定提示词基座；③语调路由：每轮装配「人格块 + 主会话/共享房间语调块 + 成员画像块」，查询失败默认房间语调、配置读取失败回退出厂种子；④SPA：侧栏「主会话」分组置顶（头像「秘」，名随配置）+ 「秘书设置」面板（四项表单 + 字数统计 + 保存回显）。
+
+**Verification** — `npm run build --prefix apps/web`（tsc+vite）PASS；生产 E2E（真 D1/DeepSeek，DoH 直连）9/10 PASS（唯一 FAIL 为 harness 断言未跟全局配置，已修；主会话自动创建/幂等/改名传播/401 鉴权全过）。双语调实证（真模型输出）：主会话「你好呀小明～我是阿理，你的贴身秘书兼管家，24小时在线。我就叫你小明，你叫我阿理就行～」「我是阿理，你的贴身秘书兼管家，24 小时都在。你是小明，我的主人。」；共享房间「大家好，我是阿理，负责跑腿、查资料、处理杂事，随叫随到。」——亲昵/得体差异明显。截图：主会话置顶（名随配置）+ 设置面板（含字数统计）。`GET /rooms/:id` 成员 1 位 owner。已知环境约束同前：Workers 免费版 CPU 预算小，重路径偶发 1102（本次 E2E 亦见一次空 SSE，重测即过）。迁移顺序注意：`src/l1` 路径直用 E.DB，首个请求前需任一 mastra 路由先暖过 `db()` 链（或手工执行 0002）。
 
 ## [S1] Problem
 
@@ -59,10 +63,13 @@ L1 已有长期记忆（observational-memory），但它的「脸」仍是任务
 
 ## Tasks
 
-- [ ] T1: 主会话供给（`is_main` 列 + `ensureMainRoom` + `listRooms` 返回字段） — acceptance: 新用户首次 GET /rooms 自动出现主会话；同用户再取不重复创建；rooms 列表含 is_main 标记（covers: S2.1）
-- [ ] T2: 人格配置面（`persona_config` 表 + 出厂种子 + 读取缓存 + GET/PUT /settings/persona） — acceptance: GET 返回种子配置；PUT 改 name/style 后 GET 反映变更且 updated_by 记录；越长字段被裁剪/拒收（covers: S2.2, S2.5）
-- [ ] T3: 提示词装配（固定基座 + 可配置人格块 + 主/房间语调路由） — acceptance: 生产实测改 persona_config.name 后对话自我称呼随之变化；主会话与共享房间口吻差异明显；硬约束不回退（派发纪律/内部术语/密钥）（covers: S2.2, S2.3, depends: T2）
-- [ ] T4: SPA：主会话置顶 + 人格设置面板 — acceptance: 截图可见主会话分组置顶（名随配置）；侧栏「设置」打开表单改 name 保存后 GET 反映变更，主会话显示名随之变化（covers: S2.4, S2.5, depends: T1, T2）
-- [ ] T5: 生产部署与端到端验证（真 D1/DeepSeek，无 mock） — acceptance: 部署 mastra-l1 后新账号走查：登录→主会话自动出现→改人格配置生效→两语境对话→截图/E2E 证据入 Report（covers: S2.1–S2.5, depends: T1–T4）
+- [x] T1: 主会话供给（`is_main` 列 + `ensureMainRoom` + `listRooms` 返回字段） — acceptance: 新用户首次 GET /rooms 自动出现主会话；同用户再取不重复创建；rooms 列表含 is_main 标记（covers: S2.1）
+- [x] T2: 人格配置面（`persona_config` 表 + 出厂种子 + 读取缓存 + GET/PUT /settings/persona） — acceptance: GET 返回种子配置；PUT 改 name/style 后 GET 反映变更且 updated_by 记录；越长字段被裁剪/拒收（covers: S2.2, S2.5）
+- [x] T3: 提示词装配（固定基座 + 可配置人格块 + 主/房间语调路由） — acceptance: 生产实测改 persona_config.name 后对话自我称呼随之变化；主会话与共享房间口吻差异明显；硬约束不回退（派发纪律/内部术语/密钥）（covers: S2.2, S2.3, depends: T2）
+- [x] T4: SPA：主会话置顶 + 人格设置面板 — acceptance: 截图可见主会话分组置顶（名随配置）；侧栏「设置」打开表单改 name 保存后 GET 反映变更，主会话显示名随之变化（covers: S2.4, S2.5, depends: T1, T2）
+- [x] T5: 生产部署与端到端验证（真 D1/DeepSeek，无 mock） — acceptance: 部署 mastra-l1 后新账号走查：登录→主会话自动出现→改人格配置生效→两语境对话→截图/E2E 证据入 Report（covers: S2.1–S2.5, depends: T1–T4）
 
 ## Journey log
+- 人格按用户要求「不要写死，要能配置」设计：四项配置落 D1 + API + 设置面板，提示词只留安全基座——改人格不改代码。
+- `ensureMainRoom` 首版用 members JOIN 回查刚建的房间（此刻尚无成员行）→ 成员插入被静默跳过成孤儿房；回查改 `created_by` + NOT EXISTS 同口径。教训：同函数内「先建主行再建从行」的回查不能走从表 JOIN。
+- DNS 一律走 HTTP/DoH（用户指令）：系统 DNS 被污染/Clash TUN 劫持；`curl --doh-url https://dns.google/dns-query` 直连 workers.dev 全通（真 Cloudflare IP + 正确 SNI 即可，拦路的只有 DNS）。node 侧 `scripts/doh-lookup.mjs`；国内 DoH 对 workers.dev 返回假 IP，勿用。

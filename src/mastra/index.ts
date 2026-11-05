@@ -457,14 +457,19 @@ export const mastra = new Mastra({
               try {
                 const p = await getPersona(E.DB);
                 parts.push(personaBlock(p));
-                if (threadId) {
-                  const r: any = await E.DB.prepare('SELECT is_main FROM rooms WHERE id = ?').bind(threadId).first();
-                  parts.push(
-                    r?.is_main
-                      ? '【语调】这是与主人的一对一主会话：用亲密的管家伴侣口吻，自然用主人的称呼与偏好，可以有体己话。'
-                      : '【语调】这是共享房间：口吻得体、均衡、照顾在场成员，不要向其他成员炫耀对主人的私密了解。',
-                  );
-                }
+                // 语调：查询失败默认按房间语调（S2.3）
+                let isMain = false;
+                try {
+                  if (threadId) {
+                    const r: any = await E.DB.prepare('SELECT is_main FROM rooms WHERE id = ?').bind(threadId).first();
+                    isMain = !!r?.is_main;
+                  }
+                } catch {}
+                parts.push(
+                  isMain
+                    ? '【语调】这是与主人的一对一主会话：用亲密的管家伴侣口吻，自然用主人的称呼与偏好，可以有体己话。'
+                    : '【语调】这是共享房间：口吻得体、均衡、照顾在场成员，不要向其他成员炫耀对主人的私密了解。',
+                );
                 const block = await loadRoomProfileBlock(E.DB, threadId);
                 if (block) parts.push(block);
               } catch (e: any) {
