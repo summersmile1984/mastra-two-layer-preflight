@@ -59,12 +59,18 @@ function matchField(tok: string, val: number, min: number, max: number): boolean
 }
 
 /** Wall-clock parts in a named IANA timezone (fallback UTC+8 for Asia/Shanghai). */
+const fmtCache = new Map<string, Intl.DateTimeFormat>();
 export function zonedParts(ms: number, tz = 'Asia/Shanghai') {
   try {
-    const fmt = new Intl.DateTimeFormat('en-US', {
-      timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23', weekday: 'short',
-    });
+    // Intl.DateTimeFormat 构造开销大，按 tz 缓存（cron 扫描每分钟都会走到这里）
+    let fmt = fmtCache.get(tz);
+    if (!fmt) {
+      fmt = new Intl.DateTimeFormat('en-US', {
+        timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23', weekday: 'short',
+      });
+      fmtCache.set(tz, fmt);
+    }
     const map: Record<string, string> = {};
     for (const p of fmt.formatToParts(new Date(ms))) if (p.type !== 'literal') map[p.type] = p.value;
     const dowMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };

@@ -58,29 +58,41 @@ export async function createVaultEntry(env: any, db: any, userId: string, input:
   const id = `vault-${crypto.randomUUID()}`;
   const secretName = `vault__${userId}__${id}`;
   const storeId = String(env.VAULT_STORE_ID ?? '');
-  const res = await api(env, `/secrets_store/stores/${storeId}/secrets`, {
-    method: 'POST',
-    body: JSON.stringify([{ name: secretName, value, scopes: ['workers'] }]),
-  });
-  const body: any = await res.json().catch(() => ({}));
-  const created = body?.result?.[0];
-  if (!body?.success || !created?.id) return { error: `secrets-store create failed: ${JSON.stringify(body?.errors ?? []).slice(0, 160)}` };
+  let created: any;
+  try {
+    const res = await api(env, `/secrets_store/stores/${storeId}/secrets`, {
+      method: 'POST',
+      body: JSON.stringify([{ name: secretName, value, scopes: ['workers'] }]),
+    });
+    const body: any = await res.json().catch(() => ({}));
+    created = body?.result?.[0];
+    if (!body?.success || !created?.id) return { error: `secrets-store create failed: ${JSON.stringify(body?.errors ?? []).slice(0, 160)}` };
+  } catch (e: any) {
+    return { error: `secrets-store unreachable: ${String(e?.message ?? e).slice(0, 120)}` };
+  }
   const row: VaultMeta = {
     id, user_id: userId, name, kind,
     secret_id: String(created.id), secret_name: secretName,
     created_at: Date.now(), expires_at: ttl > 0 ? Date.now() + ttl * 1000 : null,
     created_by: createdBy,
   };
-  await db
-    .prepare('INSERT INTO vault_meta (id,user_id,name,kind,secret_id,secret_name,created_at,expires_at,created_by) VALUES (?,?,?,?,?,?,?,?,?)')
-    .bind(row.id, row.user_id, row.name, row.kind, row.secret_id, row.secret_name, row.created_at, row.expires_at, row.created_by)
-    .run();
+  try {
+    await db
+      .prepare('INSERT INTO vault_meta (id,user_id,name,kind,secret_id,secret_name,created_at,expires_at,created_by) VALUES (?,?,?,?,?,?,?,?,?)')
+      .bind(row.id, row.user_id, row.name, row.kind, row.secret_id, row.secret_name, row.created_at, row.expires_at, row.created_by)
+      .run();
+  } catch (e: any) {
+    // D1 写失败则回滚 Secrets Store，避免孤儿密钥
+    try { await api(env, `/secrets_store/stores/${storeId}/secrets/${created.id}`, { method: 'DELETE' }); } catch {}
+    return { error: `vault_meta write failed: ${String(e?.message ?? e).slice(0, 120)}` };
+  }
   return row;
 }
 
 export async function listVaultEntries(db: any, userId: string): Promise<VaultMeta[]> {
   const { results } = await db.prepare('SELECT * FROM vault_meta WHERE user_id=? ORDER BY created_at DESC').bind(userId).all();
-  return (results ?? []) as VaultMeta[];
+  const now = Date.now();
+  return ((results ?? []) as VaultMeta[]).filter((r) => !r.expires_at || Number(r.expires_at) >= now);
 }
 
 export async function deleteVaultEntry(env: any, db: any, userId: string, id: string): Promise<{ ok: boolean; error?: string }> {
@@ -88,12 +100,25 @@ export async function deleteVaultEntry(env: any, db: any, userId: string, id: st
   if (!row) return { ok: false, error: 'not found' };
   const storeId = String(env.VAULT_STORE_ID ?? '');
   try {
-    await api(env, `/secrets_store/stores/${storeId}/secrets/${row.secret_id}`, { method: 'DELETE' });
+    // fetch 不会因 HTTP 错误抛错——必须校验响应，否则 CF 删失败仍删行会留下孤儿密钥
+    const res = await api(env, `/secrets_store/stores/${storeId}/secrets/${row.secret_id}`, { method: 'DELETE' });
+    const body: any = await res.json().catch(() => ({}));
+    if (!res.ok || body?.success === false) {
+      return { ok: false, error: `secrets-store delete failed: ${JSON.stringify(body?.errors ?? []).slice(0, 140)}` };
+    }
   } catch (e: any) {
     return { ok: false, error: String(e?.message ?? e).slice(0, 120) };
   }
   await db.prepare('DELETE FROM vault_meta WHERE id=?').bind(id).run();
   return { ok: true };
+}
+
+/** 单条读取（S2.3）：过期即视为不存在。 */
+export async function getVaultEntry(db: any, userId: string, id: string): Promise<VaultMeta | null> {
+  const row: any = await db.prepare('SELECT * FROM vault_meta WHERE id=? AND user_id=?').bind(id, userId).first();
+  if (!row) return null;
+  if (row.expires_at && Number(row.expires_at) < Date.now()) return null;
+  return row as VaultMeta;
 }
 
 /** 过期清扫（并入 schedules cron tick）：过期条目连密钥一起删。 */

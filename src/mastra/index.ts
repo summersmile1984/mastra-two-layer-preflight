@@ -43,10 +43,10 @@ import { createWorkersAiEmbedder } from './workers-ai-embedder';
 import { ensureProfileTable, upsertProfile, resolveUserByName, loadRoomProfileBlock } from './profile';
 import { ensurePersonaConfig, getPersona, updatePersona, personaBlock, buildThreadBlock, buildModelId, SEED_MODEL_ID } from './persona';
 import { indexThreadMessages } from './index-messages';
-import { ensureVaultTable, createVaultEntry, listVaultEntries, deleteVaultEntry, vaultOut, purgeExpiredVault } from './vault';
+import { ensureVaultTable, createVaultEntry, listVaultEntries, deleteVaultEntry, getVaultEntry, vaultOut, purgeExpiredVault } from './vault';
 import {
   listSchedules, getSchedule, createSchedule, updateSchedule, deleteSchedule,
-  listRuns, dueSchedules, markRun, advanceSchedule,
+  listRuns, dueSchedules, markRun, advanceSchedule, computeNextRunAt,
 } from '../l1/schedules';
 // provider-registry 的 package exports 不放行子路径——相对路径导入让打包器内联（运行时无解析）
 import providerRegistry from '../../node_modules/@mastra/core/dist/provider-registry.json';
@@ -100,7 +100,9 @@ function db() {
     .then(() => d.prepare(`CREATE TABLE IF NOT EXISTS schedule_runs (
       id TEXT PRIMARY KEY, schedule_id TEXT NOT NULL, user_id TEXT NOT NULL,
       status TEXT NOT NULL, detail TEXT, created_at INTEGER NOT NULL)`).run())
-    .then(() => d.prepare('CREATE INDEX IF NOT EXISTS schedules_due ON schedules(enabled, next_run_at)').run());
+    .then(() => d.prepare('CREATE INDEX IF NOT EXISTS schedules_due ON schedules(enabled, next_run_at)').run())
+    .then(() => d.prepare('CREATE INDEX IF NOT EXISTS schedules_user ON schedules(user_id, enabled)').run())
+    .then(() => d.prepare('CREATE INDEX IF NOT EXISTS schedule_runs_sched ON schedule_runs(schedule_id, created_at)').run());
   return { d, ready: schemaReady };
 }
 
@@ -605,6 +607,18 @@ export const mastra = new Mastra({
         },
       } as any),
       registerApiRoute('/vault/:id', {
+        method: 'GET',
+        requiresAuth: false,
+        handler: async (c: any) => {
+          const u = await getSessionUser(c.req.raw ?? { headers: c.req.headers }, E as any);
+          if (!u) return c.json({ error: 'unauthorized' }, 401);
+          const { d, ready } = db();
+          await ready;
+          const entry = await getVaultEntry(d, u.id, String(c.req.param('id') ?? ''));
+          return entry ? c.json({ entry: vaultOut(entry) }) : c.json({ error: 'not found' }, 404);
+        },
+      } as any),
+      registerApiRoute('/vault/:id', {
         method: 'DELETE',
         requiresAuth: false,
         handler: async (c: any) => {
@@ -792,13 +806,26 @@ const omQueueHandler = async (batch: any) => {
 
 // 定时任务执行（schedules-secrets S2.1）：Workers cron 每分钟 tick → 扫到期例程 →
 // 以 prompt 驱动秘书向目标房间发言（复用 compose 落消息 + RoomDO WS 通知）→ 记 runs、推 next_run_at。
+const computeNextRunAtSafe = async (rec: any, now: number): Promise<number> => {
+  try {
+    const v = computeNextRunAt(rec.cron, rec.timezone, now);
+    return v ?? now + 60_000;
+  } catch {
+    return now + 60_000;
+  }
+};
+
 const schedulesTick = async () => {
   try {
     ensureOmInstalled();
     await syncEngineCopy();
     // scheduled 路径不经过 fetch 的 mastra() 工厂——同队列消费者的接线：显式注册 Memory（否则 generate 抛 storage provider）
-    const m0: any = mastra;
-    const inst0: any = typeof m0 === 'function' ? m0() : m0;
+    let inst0: any = (globalThis as any).__omMastraInst;
+    if (!inst0) {
+      const m0: any = mastra;
+      inst0 = typeof m0 === 'function' ? m0() : m0;
+      (globalThis as any).__omMastraInst = inst0;
+    }
     try {
       (memoryRef as any).__registerMastra?.(inst0);
       const st0: any = inst0?.getStorage?.();
@@ -810,6 +837,11 @@ const schedulesTick = async () => {
     const due = await dueSchedules(d, Date.now());
     for (const rec of due as any[]) {
       try {
+        // claim：先原子推走 next_run_at（防止慢回合 + 下一 tick 双发）
+        const claimed = await d.prepare('UPDATE schedules SET next_run_at=? WHERE id=? AND next_run_at=?')
+          .bind((await computeNextRunAtSafe(rec, Date.now())), rec.id, rec.next_run_at).run();
+        if (!claimed?.meta?.changes) continue;
+        try { await advanceSchedule(d, rec.id, Date.now()); } catch {}
         const threadId = String(rec.target_id ?? '');
         const prompt = `【定时任务：${rec.name}】${rec.prompt}`;
         const msgs = await withThreadBlock([{ role: 'user', content: prompt }], threadId);
