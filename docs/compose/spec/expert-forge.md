@@ -1,6 +1,6 @@
 ---
 feature: expert-forge
-status: in-progress
+status: delivered
 updated: 2026-11-06
 source: expert-forge
 ---
@@ -8,6 +8,10 @@ source: expert-forge
 # L2 专家 JIT 运行时 + 专家工坊（定义即数据）
 
 ## Report
+
+**What was built** — 专家定义即数据 + JIT 初始化的产品闭环：`agent_defs` 扩 `skills_json`；`l2_tasks.def_json` 派发全量定义快照（含 tools/mcp/skill/memory，secretRef 不含明文），`/l2-claim` 返回 `def`；L2 `buildL2Agent` JIT 装配（tools 注册表+web_fetch 安全抓取、skills_json→createSkill、memory_json→Memory、mcp_json→MCPClient 每任务独立、按 def.id+updated_at 缓存）；专家工坊对话式创建（`draft_expert` 零副作用草案 → 主人确认 → `save_expert` 落库，validateExpertDef 硬校验），builder prompt/tool 描述全在 persona_config（零写死）。HITL 硬闸：permissions（deny 拒/allow 放/默认 ask）+ 最近一条用户消息必须含确认词才可保存。
+
+**Verification** — `npm run cf:build` PASS。生产真 E2E `/tmp/forge-e2e.mjs`（真 D1/DeepSeek/L2）**13/13 PASS**：对话建「报销管家」→草案→确认→落库（tools_json=["web_fetch"]、skills_json 含票据技能）→ dispatch → L2 JIT 构建执行 → **web_fetch 真抓取 example.com（HTTP 200，结果含 Example Domain）** → def_json 快照含工具 → 清理还原。HITL 负向探针 PASS：无确认词不落库、「确认保存」后落库。SSRF 防护走真实 URL 入口 7/7 PASS（含 `::ffff:7f00:1` 十六进制 mapped、`2130706433` 十进制 IP）。独立评审 3 MAJOR + 复审 1 残留（SSRF mapped 绕过）全部修复并终审 PASS。
 
 ## [S1] Problem
 
@@ -33,7 +37,7 @@ source: expert-forge
   - **`draft_expert`**：`{需求, 基于?已有专家名|模板名}` → 工坊生成（独立 builder Agent，structured output 出 `AgentDefDraft` zod）→ 返回**人话摘要 + 完整定义 JSON**，不落库。方法论提示词（理解需求→规划职责→生成定义→自检）入配置（builder prompt 是 persona_config 新字段）。
   - **`save_expert`**：`{draft（完整定义 JSON）}` → `validateExpertDef` → 写 `agent_defs`（同 id 已存在 = 更新覆盖，需 draft 里显式 `overwrite:true`；否则自动改名后缀）→ 「专家已就位，可以派活了」。
   - `list_experts` 已有。修改场景 = `draft_expert{基于:某专家, 需求:改…}` → 生成新草案 → save 覆盖。
-- **HITL 审批**：工具描述与基座护栏明确——草案必须主人明确确认（如「就这样/确认」）后才可调 `save_expert`；未经确认落库违背指令。配合 permissions 数据面（`save_expert` 归 ask 类），这是 AGENTS.md 安全债 #1 的第一处落地。
+- **HITL 审批**（硬闸，非仅提示词）：`save_expert` 先查 `user_permission_rules`（deny 直拒 / allow 放行 / 默认 ask）；ask 档要求**最近一条用户消息含确认词**（确认/同意/就这样/可以了/approved）才落库，fail-closed。草案阶段零副作用。这是 AGENTS.md 安全债 #1 的第一处硬落地（弹窗式审批路由仍递延）。
 - **validateExpertDef**（落库前硬校验）：必填 name/instructions；字段上限沿用 l2-experts S2.2（name 100 / description 500 / instructions 4000 / model 100）；skills/tools 引用结构合法；mcp_json 仅允许 url/command 字段（不含任意代码）。
 
 ### S2.3 模板与生成质量
@@ -58,9 +62,13 @@ source: expert-forge
 
 ## Tasks
 
-- [ ] T1: `l2_tasks.def_json` + 派发全量快照 + `/l2-claim` 返回 `def` — acceptance: claim kind=expert 带完整 def（含 skills/mcp/memory 字段）(covers: S2.1)
-- [ ] T2: JIT 工厂升级（tools 注册表+web_fetch、skills_json→createSkill、memory_json→Memory、mcp_json→MCPClient、实例缓存） — acceptance: 用带工具/技能/记忆配置的 def 真构建并执行成功 (covers: S2.1)
-- [ ] T3: 工坊 draft_expert/save_expert + validateExpertDef + builder prompt 配置 + HITL 护栏 — acceptance: 对话「建一个报销管家」→草案→确认→落库→list 可见 (covers: S2.2, S2.3)
-- [ ] T4: 真实端到端 — acceptance: 工坊创建专家→dispatch→L2 JIT 构建执行，证据含工具/技能/MCP 至少一项真实生效（如 web_fetch 被调用）；证据入 Report (covers: S2.4, depends: T1–T3)
+- [x] T1: `l2_tasks.def_json` + 派发全量快照 + `/l2-claim` 返回 `def` — acceptance: claim kind=expert 带完整 def（含 skills/mcp/memory 字段）(covers: S2.1)
+- [x] T2: JIT 工厂升级（tools 注册表+web_fetch、skills_json→createSkill、memory_json→Memory、mcp_json→MCPClient、实例缓存） — acceptance: 用带工具/技能/记忆配置的 def 真构建并执行成功 (covers: S2.1)
+- [x] T3: 工坊 draft_expert/save_expert + validateExpertDef + builder prompt 配置 + HITL 护栏 — acceptance: 对话「建一个报销管家」→草案→确认→落库→list 可见 (covers: S2.2, S2.3)
+- [x] T4: 真实端到端 — acceptance: 工坊创建专家→dispatch→L2 JIT 构建执行，证据含工具/技能/MCP 至少一项真实生效（如 web_fetch 被调用）；证据入 Report (covers: S2.4, depends: T1–T3)
 
 ## Journey log
+
+- **createSkill 名字面约束**：Mastra 技能名只允许 `[a-z0-9-]`，中文名直接抛错——构建时 slug 化（原名进 description）+ builder 提示词规范命名，两头兜住。**localStore 必须同步返回**：异步 Promise 塞进 `Memory({storage})` 会在 `getStore` 处炸（老代码有 await，重写时丢过一次）。
+- **SSRF 校验必须走真实 URL 入口测**：WHATWG `new URL()` 把 `::ffff:127.0.0.1` 规范化成 `::ffff:7f00:1`（十六进制段）、把十进制 IP `2130706433` 规范化成点分四段——手写正则防不住规范化后的形态。正确原语是 `net.BlockList.check(ip,'ipv6')`（内建 IPv4-mapped 识别）+ 未识别 IP fail-closed；测试矩阵若只打裸判定函数会全绿却仍可绕过。
+- **HITL 硬闸可行形态**（弹窗审批路由递延期间）：permissions 数据面（deny/allow/ask）+ 「最近一条用户消息含确认词」fail-closed 检查——模型无法伪造用户消息，可拦住「出完草案就顺手保存」。
