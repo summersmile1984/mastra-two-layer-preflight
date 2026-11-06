@@ -14,7 +14,7 @@ export async function runExpert(task: ClaimTask): Promise<{ ok: true; text: stri
     console.log('[expert] mastra-agent failed, fallback ACP', String((e as any)?.message ?? e).slice(0, 120));
     // ACP 兜底带上专家指令（评审 MAJOR：否则兜底跑成人格缺失的裸任务）
     const instructions = String(task.instructions || '你是专家助手，用中文简短、结构化回复。').slice(0, 8000);
-    const prompt = String(task.prompt || '').slice(0, 6000);
+    const prompt = String(task.prompt || '').slice(0, 20000);
     return runAcp({ ...task, prompt: `【专家指令】\n${instructions}\n\n【用户任务】\n${prompt}` });
   }
 }
