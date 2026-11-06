@@ -1,6 +1,6 @@
 ---
 feature: l2-experts
-status: in-progress
+status: delivered
 updated: 2026-11-06
 source: l2-experts
 ---
@@ -8,6 +8,10 @@ source: l2-experts
 # L2 专家体系：agent_defs + dispatch_to_expert（执行位 = 用户电脑/云电脑）
 
 ## Report
+
+**What was built** — L2 专家核心闭环：D1 `agent_defs` 专家目录（出厂种子 researcher/coder，owner 范围 CRUD：读/改 = 本人+system 种子，删 = 仅本人，种子可改不可删，重复 id→400）；`dispatch_to_expert`/`list_experts` 秘书工具（描述与基座护栏出自 persona_config，零写死）；`l2_tasks` 专家管道（kind/expert_id/instructions 快照，`/l2-claim` 契约带 expertId/instructions/resourceId/model，sandbox 任务向后兼容）；L2 执行位 `runExpertAgent`（Mastra Agent + LibSQL 本地记忆，thread id = L1 threadId，双房间不串线）；l2-pull-worker 与 l2-desktop 双端接通（ACP 兜底保留且带专家指令）。
+
+**Verification** — `npm run cf:build` PASS（mastra bundle + worker-entry）；生产真 E2E `/tmp/l2exp-e2e.mjs`（真 D1/DeepSeek/L2 pull worker）**19/19 PASS**：agent_defs 种子+CRUD+dup-id 400+种子不可删 404、对话派发 ack、L2 领取 `kind=expert expert=researcher`、暗号 ZHOU7（经 PUT agent_defs.instructions 注入）出现在 L2 原始结果（指令快照链路实证）、`mastra_threads/mastra_resources` 含房间 A thread id、A 记「天舟」+同线程回忆「天舟」、B 房间不串线「不知道」、双 L2 线程并存、种子指令还原。独立评审（1 CRITICAL + 3 MAJOR）修复后聚焦复审 PASS、无新增 critical。隔离复现 `/tmp/l2mem-repro.mts` PASS（同线程回忆）。
 
 ## [S1] Problem
 
@@ -26,11 +30,12 @@ source: l2-experts
 
 - 表 `agent_defs`（0007_experts.sql）：id, owner_user_id, name, description, instructions, model, tools_json, mcp_json, memory_json, created_at, updated_at + owner 索引。出厂种子两位：researcher（调研专家）、coder（工程师）（instructions 取远端 EXPERT_CATALOG 文案，去掉 [agent:] 相关语）。
 - 路由（本地风格）：`GET /agent-defs`（登录可读，owner 范围）、`POST /agent-defs`、`PUT/DELETE /agent-defs/:id`。字段上限 name 100 / description 500 / instructions 4000。
+- owner 范围规则（评审 CRITICAL 修复，定稿）：读/改 = `owner_user_id ∈ {本人, 'system'}`；删 = 仅本人（出厂种子共享可改不可删）；重复 id → 400。L1 工具层（list_experts/resolveExpert）保持全目录视角（单主人产品）。
 
 ### S2.3 l2_tasks 专家管道（移植远端 0004 思路）
 
 - `l2_tasks` 加 `expert_id TEXT` + `instructions TEXT`（派发时从 agent_defs 快照，L2 离线也能执行）+ `kind TEXT DEFAULT 'sandbox'`；索引 (expert_id, state)。
-- `/l2-claim` 响应扩为 `{taskId, prompt, runtime, threadId, kind, expertId, instructions, resourceId}`——`resolveKind` 已支持 expert（apps/l2-desktop/src/dispatch.ts）；`runExpert` **升级为 Mastra Agent 执行**（S2.5）。
+- `/l2-claim` 响应扩为 `{taskId, prompt, runtime, threadId, kind, expertId, instructions, resourceId, model}`（model 为 claim 时从 agent_defs 查的即时值，未配置为 null）——`resolveKind` 已支持 expert（apps/l2-desktop/src/dispatch.ts）；`runExpert` **升级为 Mastra Agent 执行**（S2.5）。
 - 交互管道不变：A2A Task 形状报文 + HTTP（/l2-claim 轮询上行领、/a2a-callback hook 下行交），全链路异步。
 - 汇报闭环复用：/a2a-callback → finalize → compose 落房 + RoomDO 通知。
 
@@ -56,10 +61,12 @@ source: l2-experts
 
 ## Tasks
 
-- [ ] T1: agent_defs 表 + 种子 + CRUD 路由 — acceptance: GET 返回 researcher/coder；POST/PUT/DELETE 生效（covers: S2.2）
-- [ ] T2: l2_tasks 扩展（kind/expert_id/instructions）+ /l2-claim 响应 — acceptance: claim 返回 expert 字段（covers: S2.3）
-- [ ] T3: dispatch_to_expert / list_experts 工具 + 基座护栏 — acceptance: 对话「让调研专家…」入队 kind=expert（covers: S2.4）
-- [ ] T4: runExpert 升级为 Mastra Agent（buildL2Agent + 本地 LibSQL Memory，thread 对齐） — acceptance: 专家以 Mastra Agent 执行且 L2 本地记忆线程 id = L1 threadId（covers: S2.5, depends: T2）
-- [ ] T5: 真实 L2 端到端 — acceptance: 本机 L2 领取并真执行，汇报落房；双房间任务记忆不串线；证据入 Report（covers: S2.6, depends: T1–T4）
+- [x] T1: agent_defs 表 + 种子 + CRUD 路由 — acceptance: GET 返回 researcher/coder；POST/PUT/DELETE 生效（covers: S2.2）
+- [x] T2: l2_tasks 扩展（kind/expert_id/instructions）+ /l2-claim 响应 — acceptance: claim 返回 expert 字段（covers: S2.3）
+- [x] T3: dispatch_to_expert / list_experts 工具 + 基座护栏 — acceptance: 对话「让调研专家…」入队 kind=expert（covers: S2.4）
+- [x] T4: runExpert 升级为 Mastra Agent（buildL2Agent + 本地 LibSQL Memory，thread 对齐） — acceptance: 专家以 Mastra Agent 执行且 L2 本地记忆线程 id = L1 threadId（covers: S2.5, depends: T2）
+- [x] T5: 真实 L2 端到端 — acceptance: 本机 L2 领取并真执行，汇报落房；双房间任务记忆不串线；证据入 Report（covers: S2.6, depends: T1–T4）
 
 ## Journey log
+
+- E2E 进程陷阱：`spawn('npx', ['tsx', …])` 后 SIGTERM 杀不掉 tsx 子进程，孤儿 L2 会抢 claim 污染验证——验证脚本必须 `detached:true` + 杀进程组（或先 `pkill -f l2-pull-worker`）。同理，断言 L2 记忆别猜表名：LibSQLStore 是 `mastra_threads`/`mastra_resources` 前缀；`/l2-results` 有「reply 落库前 60s 退化回原始 result」的竞态，证据断言以 D1 原始行为准。
