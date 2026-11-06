@@ -38,14 +38,14 @@ export type L2ExpertTask = {
   def?: ExpertDefSnapshot | null;
 };
 
-let storeP: Promise<any> | null = null;
-function localStore() {
-  storeP ??= Promise.resolve().then(() => {
+let store: any = null;
+function localStore(): any {
+  if (!store) {
     const dir = resolve(process.env.L2_MEMORY_DIR || 'workspace-l2');
     mkdirSync(dir, { recursive: true });
-    return new LibSQLStore({ id: 'l2-memory', url: `file:${resolve(dir, 'memory.db')}` } as any);
-  });
-  return storeP;
+    store = new LibSQLStore({ id: 'l2-memory', url: `file:${resolve(dir, 'memory.db')}` } as any);
+  }
+  return store;
 }
 
 const FALLBACK_INSTRUCTIONS = '你是专家助手，用中文简短、结构化回复。';
@@ -70,15 +70,26 @@ function buildMemory(memoryJson: unknown): InstanceType<typeof Memory> {
   } as any) as any;
 }
 
+/** 技能名 slug 化：Mastra createSkill 仅允许 [a-z0-9-]；中文名保留进 description。 */
+function slugifySkillName(name: string, used: Set<string>): string {
+  let s = String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'skill';
+  if (!/^[a-z0-9]/.test(s)) s = `s-${s}`;
+  let out = s, i = 2;
+  while (used.has(out)) out = `${s}-${i++}`;
+  used.add(out);
+  return out;
+}
+
 /** skills_json → createSkill 内联技能（按需加载）。 */
 function buildSkills(skillsJson: unknown): any[] {
   const list = parseJson<any[]>(skillsJson);
   if (!Array.isArray(list)) return [];
+  const used = new Set<string>();
   return list
     .filter((s) => s && typeof s.name === 'string' && typeof s.instructions === 'string')
     .map((s) => createSkill({
-      name: String(s.name).slice(0, 60),
-      description: String(s.description ?? '').slice(0, 200) || '按需加载的专家技能',
+      name: slugifySkillName(s.name, used),
+      description: String(s.description ?? '').slice(0, 200) || `技能「${String(s.name).slice(0, 40)}」（按需加载）`,
       instructions: String(s.instructions).slice(0, 8000),
     }));
 }
