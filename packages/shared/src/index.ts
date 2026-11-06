@@ -16,6 +16,22 @@ export type ClaimTask = {
   instructions?: string | null;
   /** Expert model override from agent_defs (claim-time lookup). */
   model?: string | null;
+  /** Full agent_defs snapshot (expert-forge S2.1) for JIT agent construction. */
+  def?: ExpertDefSnapshot | null;
+};
+
+/** Snapshot of an agent_defs row carried on expert tasks (JSON fields as stored). */
+export type ExpertDefSnapshot = {
+  id?: string | null;
+  name?: string | null;
+  description?: string | null;
+  instructions?: string | null;
+  model?: string | null;
+  tools_json?: string | null;
+  mcp_json?: string | null;
+  skills_json?: string | null;
+  memory_json?: string | null;
+  updated_at?: number | null;
 };
 
 export type ClaimResponse = {

@@ -19,6 +19,7 @@ type Claimed = {
   taskId: string; prompt?: string; runtime?: string; kind?: string;
   expertId?: string | null; instructions?: string | null; threadId?: string;
   resourceId?: string | null; model?: string | null;
+  def?: import('./l2/expert-agent.js').ExpertDefSnapshot | null;
 };
 
 function resolveKind(t: Claimed): 'expert' | 'cua' | 'acp' {
@@ -36,7 +37,7 @@ async function runExpert(t: Claimed): Promise<string> {
   return runExpertAgent({
     prompt: String(t.prompt || ''),
     expertId: t.expertId, instructions: t.instructions, model: t.model,
-    threadId: t.threadId, resourceId: t.resourceId,
+    threadId: t.threadId, resourceId: t.resourceId, def: t.def ?? null,
   });
 }
 

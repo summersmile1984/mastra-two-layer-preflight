@@ -9,6 +9,7 @@ export type ExpertDef = {
   model: string | null;
   tools_json: string | null;
   mcp_json: string | null;
+  skills_json: string | null;
   memory_json: string | null;
   created_at: number;
   updated_at: number;
@@ -37,10 +38,12 @@ export async function ensureAgentDefs(db: any): Promise<void> {
     .prepare(
       `CREATE TABLE IF NOT EXISTS agent_defs (
         id TEXT PRIMARY KEY, owner_user_id TEXT NOT NULL, name TEXT NOT NULL, description TEXT,
-        instructions TEXT NOT NULL, model TEXT, tools_json TEXT, mcp_json TEXT, memory_json TEXT,
+        instructions TEXT NOT NULL, model TEXT, tools_json TEXT, mcp_json TEXT, skills_json TEXT, memory_json TEXT,
         created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`,
     )
     .run();
+  // 旧库补列（expert-forge S2.1）
+  await db.prepare('ALTER TABLE agent_defs ADD COLUMN skills_json TEXT').run().catch(() => null);
   for (const e of SEED_EXPERTS) {
     await db
       .prepare(
@@ -53,10 +56,25 @@ export async function ensureAgentDefs(db: any): Promise<void> {
 }
 
 export function expertOut(r: any) {
+  const parse = (v: unknown) => {
+    if (v == null) return null;
+    try { return JSON.parse(String(v)); } catch { return null; }
+  };
   return {
     id: r.id, name: r.name, description: r.description, instructions: r.instructions,
     model: r.model ?? null, owner_user_id: r.owner_user_id, updated_at: r.updated_at,
+    tools_json: parse(r.tools_json), mcp_json: parse(r.mcp_json), skills_json: parse(r.skills_json), memory_json: parse(r.memory_json),
   };
+}
+
+const LIMITS_JSON = 8000;
+/** 归一化 JSON 配置字段：对象/数组序列化，字符串直存，超长截断拒绝。 */
+function jsonField(v: unknown): string | null {
+  if (v == null || v === '') return null;
+  const s = typeof v === 'string' ? v : JSON.stringify(v);
+  if (s.length > LIMITS_JSON) return null;
+  try { JSON.parse(s); } catch { return null; }
+  return s;
 }
 
 export async function listExperts(db: any, userId?: string): Promise<ExpertDef[]> {
@@ -88,12 +106,13 @@ export async function createExpert(db: any, ownerUserId: string, input: any): Pr
     description: String(input?.description ?? '').trim().slice(0, LIMITS.description),
     instructions: instructions.slice(0, LIMITS.instructions),
     model: input?.model ? String(input.model).slice(0, LIMITS.model) : null,
-    tools_json: null, mcp_json: null, memory_json: null,
+    tools_json: jsonField(input?.tools_json), mcp_json: jsonField(input?.mcp_json),
+    skills_json: jsonField(input?.skills_json), memory_json: jsonField(input?.memory_json),
     created_at: Date.now(), updated_at: Date.now(),
   };
   await db
-    .prepare('INSERT INTO agent_defs (id,owner_user_id,name,description,instructions,model,tools_json,mcp_json,memory_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
-    .bind(row.id, row.owner_user_id, row.name, row.description, row.instructions, row.model, null, null, null, row.created_at, row.updated_at)
+    .prepare('INSERT INTO agent_defs (id,owner_user_id,name,description,instructions,model,tools_json,mcp_json,skills_json,memory_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+    .bind(row.id, row.owner_user_id, row.name, row.description, row.instructions, row.model, row.tools_json, row.mcp_json, row.skills_json, row.memory_json, row.created_at, row.updated_at)
     .run();
   return row;
 }
@@ -113,6 +132,11 @@ export async function updateExpert(db: any, id: string, input: any, userId: stri
   put('description', input?.description, LIMITS.description);
   put('instructions', input?.instructions, LIMITS.instructions);
   put('model', input?.model, LIMITS.model);
+  for (const col of ['tools_json', 'mcp_json', 'skills_json', 'memory_json'] as const) {
+    if (input?.[col] === undefined) continue;
+    fields.push(`${col} = ?`);
+    args.push(jsonField(input[col]));
+  }
   if (fields.length) {
     args.push(Date.now(), id);
     await db.prepare(`UPDATE agent_defs SET ${fields.join(', ')}, updated_at = ? WHERE id = ?`).bind(...args).run();
@@ -124,4 +148,63 @@ export async function deleteExpert(db: any, id: string, userId: string): Promise
   // 只删本人的自定义专家；出厂种子（'system'）共享可改不可删
   const u = await db.prepare('DELETE FROM agent_defs WHERE id = ? AND owner_user_id = ?').bind(id, userId).run();
   return Number(u?.meta?.changes ?? 0) > 0;
+}
+
+// ---------- 专家工坊（expert-forge S2.2/S2.3）：草案校验 + 落库 ----------
+export type AgentDefDraft = {
+  id?: string;
+  name: string;
+  description?: string;
+  instructions: string;
+  model?: string | null;
+  tools_json?: unknown;
+  mcp_json?: unknown;
+  skills_json?: unknown;
+  memory_json?: unknown;
+  overwrite?: boolean;
+  rationale?: string;
+};
+
+/** 落库前硬校验：字段上限 + 结构合法性（mcp 仅 url/command 族，无任意代码）。 */
+export function validateExpertDef(d: any): { ok: true } | { ok: false; error: string } {
+  const name = String(d?.name ?? '').trim();
+  const instructions = String(d?.instructions ?? '').trim();
+  if (!name) return { ok: false, error: 'name required' };
+  if (name.length > LIMITS.name) return { ok: false, error: `name 超长（>${LIMITS.name}）` };
+  if (!instructions) return { ok: false, error: 'instructions required' };
+  if (instructions.length > LIMITS.instructions) return { ok: false, error: `instructions 超长（>${LIMITS.instructions}）` };
+  if (d?.description && String(d.description).length > LIMITS.description) return { ok: false, error: `description 超长（>${LIMITS.description}）` };
+  if (d?.model && String(d.model).length > LIMITS.model) return { ok: false, error: `model 超长（>${LIMITS.model}）` };
+  const tools = d?.tools_json;
+  if (tools != null && tools !== '') {
+    const list = typeof tools === 'string' ? JSON.parse(tools) : tools;
+    if (!Array.isArray(list)) return { ok: false, error: 'tools_json 须为数组' };
+    for (const t of list) {
+      const id = typeof t === 'string' ? t : t?.id;
+      if (typeof id !== 'string' || !id) return { ok: false, error: 'tools_json 条目须为字符串或 {id}' };
+    }
+  }
+  const skills = d?.skills_json;
+  if (skills != null && skills !== '') {
+    const list = typeof skills === 'string' ? JSON.parse(skills) : skills;
+    if (!Array.isArray(list)) return { ok: false, error: 'skills_json 须为数组' };
+    for (const s of list) {
+      if (!s || typeof s.name !== 'string' || typeof s.instructions !== 'string') {
+        return { ok: false, error: 'skills_json 条目须含 name/instructions' };
+      }
+    }
+  }
+  const mcp = d?.mcp_json;
+  if (mcp != null && mcp !== '') {
+    let cfg: any = mcp;
+    if (typeof mcp === 'string') { try { cfg = JSON.parse(mcp); } catch { return { ok: false, error: 'mcp_json 非法 JSON' }; } }
+    if (typeof cfg !== 'object' || !cfg.servers || typeof cfg.servers !== 'object') return { ok: false, error: 'mcp_json 须含 servers' };
+    const allowed = new Set(['url', 'command', 'args', 'env', 'requireToolApproval']);
+    for (const s of Object.values<any>(cfg.servers)) {
+      if (!s || typeof s !== 'object') return { ok: false, error: 'mcp server 配置须为对象' };
+      if (!s.url && !s.command) return { ok: false, error: 'mcp server 须含 url 或 command' };
+      for (const k of Object.keys(s)) if (!allowed.has(k)) return { ok: false, error: `mcp server 不支持字段 ${k}` };
+    }
+  }
+  return { ok: true };
 }

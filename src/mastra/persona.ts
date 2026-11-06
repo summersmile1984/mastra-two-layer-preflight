@@ -16,6 +16,8 @@ export type PersonaConfig = {
   tool_dispatch: string;
   tool_schedule: string;
   tool_expert: string;
+  tool_forge: string;
+  builder_prompt: string;
   model_gateway: string;
   model_name: string;
   model_effort: string;
@@ -33,6 +35,7 @@ const SEED: Omit<PersonaConfig, 'updated_at' | 'updated_by'> = {
 对用户不可见的内部细节：绝不提 L2、harness、ACP、沙箱、运行时、任务 id、内部路径、A2A。只用自然语言说“我来处理/处理好了”。
 消息含“本地”或 route=local 时 runtime 选 local，否则选 cloud。不要反问澄清，信息不全也直接派发。
 专业任务（调研/分析/写代码/排错等）一律经 dispatch_to_expert 派给 L2 专家执行，不要自己扮演专家；点名某位专家时先用 list_experts 查目录。
+主人要新建或修改专家时走专家工坊：draft_expert 出草案给主人过目，主人明确确认后才 save_expert 落库，绝不未经确认保存。
 如果 dispatch_to_sandbox 返回 ok:false，如实简短告诉用户“后台处理暂时不可用”，并给出你力所能及的直接回答。
 收到 <sandbox-result> 通知时，简要向用户汇报结果（不要复述内部细节）。
 闲聊或询问在线状态直接一句话回复。绝不让用户在聊天里发密码，也绝不复述任何密钥。回复简短，用中文。`,
@@ -42,6 +45,12 @@ const SEED: Omit<PersonaConfig, 'updated_at' | 'updated_by'> = {
   om_reflect: '压缩合并时优先保留主人的身份/称呼/偏好/决定/待办/事实，丢弃寒暄与重复。',
   tool_dispatch: '把慢任务派发到后台执行，立即返回（不等待结果）；完成后会自动通知。',
   tool_expert: '把专业任务派给 L2 专家执行（dispatch_to_expert）。专家在用户的电脑/云电脑上干活（Mastra Agent），完成后自动汇报。当任务属于调研/分析/写代码/排错等专业活，或主人点名某位专家时使用：expert=专家名或 id（先用 list_experts 查），task=任务描述，runtime=local（用户电脑）或 cloud（云电脑）。专家任务一律用本工具派发，不要自己扮演专家。',
+  tool_forge: '专家工坊（draft_expert / save_expert）：主人说要什么专家时，先用 draft_expert（需求=主人的描述，可基于已有专家或模板改）生成草案，把人话摘要和定义要点讲给主人听；**必须等主人明确确认**（如「就这样/确认」）后才调用 save_expert 落库，绝不未经确认就保存。save_expert 的 draft 要带完整定义 JSON；同名已存在时只有主人要求覆盖才带 overwrite:true。',
+  builder_prompt: `你是「专家工坊」。把主人的需求变成一条 L2 专家定义（agent_defs 数据行，不是代码）。方法：①理解需求（职责边界、要什么能力）→ ②规划（专家叫什么、一句话专长、系统提示词要点、需要的工具/技能）→ ③生成定义 → ④自检（字段齐全、指令可执行、不写死假设）。
+产出严格 JSON：{"name","description","instructions","model","tools_json","mcp_json","skills_json","memory_json","rationale"}。
+- name≤100字；description 一句话专长（≤500字）；instructions 是给专家的系统提示词（≤4000字，中文，含角色/能力/边界/输出风格；提及线程记忆连续性）。
+- model 通常留空（继承全局）；tools_json 例 ["web_fetch"]；skills_json 例 [{"name","description","instructions"}]（按需加载的操作规程）；mcp_json 例 {"servers":{"名":{"url":"https://..."}}}；memory_json 例 {"lastMessages":20,"workingMemory":{"template":"# 任务档案\\n- 关键事实："}}。没有需要就留 null。
+- rationale 用两三句话向主人解释你为什么这样设计。`,
   tool_schedule: '创建定时例程（create_schedule）。当主人用自然语言提到定时安排（如「每天早上8点给我打招呼」）时调用：name=例程名，prompt=到点要执行的内容，cron=5 字段（分 时 日 月 周，时区默认 Asia/Shanghai）。常用换算：每天 8 点=0 8 * * *；每小时=0 * * * *；工作日 9 点=0 9 * * 1-5；每周一 9 点=0 9 * * 1；每分钟=* * * * *。也可用预设 every_minute/hourly/daily_9/weekdays_9/weekly_mon_9。管理用 list_schedules / delete_schedule。',
   model_gateway: 'deepseek',
   model_name: 'deepseek-chat',
@@ -50,7 +59,7 @@ const SEED: Omit<PersonaConfig, 'updated_at' | 'updated_by'> = {
 
 const LIMITS = {
   name: 200, role: 500, style: 1000, main_room_name: 50,
-  base_prompt: 4000, tone_main: 500, tone_room: 500, om_observe: 500, om_reflect: 500, tool_dispatch: 500, tool_schedule: 1000, tool_expert: 800,
+  base_prompt: 4000, tone_main: 500, tone_room: 500, om_observe: 500, om_reflect: 500, tool_dispatch: 500, tool_schedule: 1000, tool_expert: 800, tool_forge: 1500, builder_prompt: 4000,
   model_gateway: 100, model_name: 200, model_effort: 20,
 };
 
@@ -63,7 +72,7 @@ export async function ensurePersonaConfig(db: any): Promise<void> {
     )
     .run();
   // 0003/0004 扩展列（幂等；旧库补列）
-  for (const col of ['base_prompt', 'tone_main', 'tone_room', 'om_observe', 'om_reflect', 'tool_dispatch', 'tool_schedule', 'tool_expert', 'model_gateway', 'model_name', 'model_effort']) {
+  for (const col of ['base_prompt', 'tone_main', 'tone_room', 'om_observe', 'om_reflect', 'tool_dispatch', 'tool_schedule', 'tool_expert', 'tool_forge', 'builder_prompt', 'model_gateway', 'model_name', 'model_effort']) {
     await db.prepare(`ALTER TABLE persona_config ADD COLUMN ${col} TEXT`).run().catch(() => null);
   }
   await db
@@ -78,10 +87,10 @@ export async function ensurePersonaConfig(db: any): Promise<void> {
     .prepare(
       `UPDATE persona_config SET base_prompt = COALESCE(base_prompt, ?), tone_main = COALESCE(tone_main, ?),
        tone_room = COALESCE(tone_room, ?), om_observe = COALESCE(om_observe, ?), om_reflect = COALESCE(om_reflect, ?),
-       tool_dispatch = COALESCE(tool_dispatch, ?), tool_schedule = COALESCE(tool_schedule, ?), tool_expert = COALESCE(tool_expert, ?), model_gateway = COALESCE(model_gateway, ?),
+       tool_dispatch = COALESCE(tool_dispatch, ?), tool_schedule = COALESCE(tool_schedule, ?), tool_expert = COALESCE(tool_expert, ?), tool_forge = COALESCE(tool_forge, ?), builder_prompt = COALESCE(builder_prompt, ?), model_gateway = COALESCE(model_gateway, ?),
        model_name = COALESCE(model_name, ?), model_effort = COALESCE(model_effort, ?) WHERE id = 1`,
     )
-    .bind(SEED.base_prompt, SEED.tone_main, SEED.tone_room, SEED.om_observe, SEED.om_reflect, SEED.tool_dispatch, SEED.tool_schedule, SEED.tool_expert,
+    .bind(SEED.base_prompt, SEED.tone_main, SEED.tone_room, SEED.om_observe, SEED.om_reflect, SEED.tool_dispatch, SEED.tool_schedule, SEED.tool_expert, SEED.tool_forge, SEED.builder_prompt,
       SEED.model_gateway, SEED.model_name, SEED.model_effort)
     .run();
 }
@@ -114,6 +123,7 @@ export async function getPersona(db: any, force = false): Promise<PersonaConfig>
     name: pick('name'), role: pick('role'), style: pick('style'), main_room_name: pick('main_room_name'),
     base_prompt: pick('base_prompt'), tone_main: pick('tone_main'), tone_room: pick('tone_room'),
     om_observe: pick('om_observe'), om_reflect: pick('om_reflect'), tool_dispatch: pick('tool_dispatch'), tool_schedule: pick('tool_schedule'), tool_expert: pick('tool_expert'),
+    tool_forge: pick('tool_forge'), builder_prompt: pick('builder_prompt'),
     model_gateway: pick('model_gateway'), model_name: pick('model_name'), model_effort: pick('model_effort'),
     updated_at: Number(row?.updated_at ?? 0),
     updated_by: row?.updated_by ? String(row.updated_by) : null,

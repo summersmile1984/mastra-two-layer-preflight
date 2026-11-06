@@ -7,7 +7,7 @@ export async function runExpert(task: ClaimTask): Promise<{ ok: true; text: stri
   try {
     const text = await runExpertAgent({
       prompt: String(task.prompt || ''), expertId: task.expertId, instructions: task.instructions, model: task.model,
-      threadId: (task as any).threadId, resourceId: task.resourceId,
+      threadId: (task as any).threadId, resourceId: task.resourceId, def: task.def ?? null,
     });
     return { ok: true, text };
   } catch (e) {

@@ -44,7 +44,7 @@ import { ensureProfileTable, upsertProfile, resolveUserByName, loadRoomProfileBl
 import { ensurePersonaConfig, getPersona, updatePersona, personaBlock, buildThreadBlock, buildModelId, SEED_MODEL_ID } from './persona';
 import { indexThreadMessages } from './index-messages';
 import { ensureVaultTable, createVaultEntry, listVaultEntries, deleteVaultEntry, getVaultEntry, vaultOut, purgeExpiredVault } from './vault';
-import { ensureAgentDefs, listExperts, resolveExpert, createExpert, updateExpert, deleteExpert, expertOut } from './experts';
+import { ensureAgentDefs, listExperts, resolveExpert, createExpert, updateExpert, deleteExpert, expertOut, validateExpertDef } from './experts';
 import {
   listSchedules, getSchedule, createSchedule, updateSchedule, deleteSchedule,
   listRuns, dueSchedules, markRun, advanceSchedule, computeNextRunAt,
@@ -107,6 +107,7 @@ function db() {
     .then(() => d.prepare('ALTER TABLE l2_tasks ADD COLUMN expert_id TEXT').run().catch(() => null))
     .then(() => d.prepare('ALTER TABLE l2_tasks ADD COLUMN instructions TEXT').run().catch(() => null))
     .then(() => d.prepare("ALTER TABLE l2_tasks ADD COLUMN kind TEXT DEFAULT 'sandbox'").run().catch(() => null))
+    .then(() => d.prepare('ALTER TABLE l2_tasks ADD COLUMN def_json TEXT').run().catch(() => null))
     .then(() => d.prepare('CREATE INDEX IF NOT EXISTS idx_l2_tasks_expert ON l2_tasks(expert_id, state)').run())
     .then(() => ensureAgentDefs(d));
   return { d, ready: schemaReady };
@@ -206,8 +207,14 @@ const dispatch_expert_tool = createTool({
       if (!threadId) return { ok: false, reason: '缺少会话 thread，无法派发' };
       const taskId = `t-${crypto.randomUUID()}`;
       const now = Date.now();
-      await d.prepare('INSERT INTO l2_tasks (task_id,thread_id,resource_id,runtime,state,prompt,created_at,updated_at,kind,expert_id,instructions) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
-        .bind(taskId, threadId, resourceId || null, runtime, 'queued', String(task).slice(0, 20000), now, now, 'expert', def.id, def.instructions)
+      // 定义快照（expert-forge S2.1）：完整 agent_defs 行随任务下发，L2 侧 JIT 构建；secretRef 不含明文
+      const defJson = JSON.stringify({
+        id: def.id, name: def.name, description: def.description, instructions: def.instructions,
+        model: def.model ?? null, tools_json: def.tools_json ?? null, mcp_json: def.mcp_json ?? null,
+        skills_json: def.skills_json ?? null, memory_json: def.memory_json ?? null, updated_at: def.updated_at,
+      });
+      await d.prepare('INSERT INTO l2_tasks (task_id,thread_id,resource_id,runtime,state,prompt,created_at,updated_at,kind,expert_id,instructions,def_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+        .bind(taskId, threadId, resourceId || null, runtime, 'queued', String(task).slice(0, 20000), now, now, 'expert', def.id, def.instructions, defJson)
         .run();
       try { await notifyRoom(threadId, { kind: 'busy' }); } catch {}
       return { ok: true, status: 'queued', expert: def.name, expertId: def.id, taskId };
@@ -226,6 +233,91 @@ const list_experts_tool = createTool({
       const { d, ready } = db();
       await ready;
       return { ok: true, experts: (await listExperts(d)).map((e: any) => ({ id: e.id, name: e.name, description: e.description })) };
+    } catch (e: any) {
+      return { ok: false, reason: String(e?.message ?? e).slice(0, 160) };
+    }
+  },
+});
+
+// 专家工坊（expert-forge S2.2）：draft 出草案（零副作用）→ 主人确认 → save 落库
+const DraftSchema = z.object({
+  id: z.string().nullable().optional(),
+  name: z.string(),
+  description: z.string().nullable().optional(),
+  instructions: z.string(),
+  model: z.string().nullable().optional(),
+  tools_json: z.any().nullable().optional(),
+  mcp_json: z.any().nullable().optional(),
+  skills_json: z.any().nullable().optional(),
+  memory_json: z.any().nullable().optional(),
+  rationale: z.string().nullable().optional(),
+});
+
+const draft_expert_tool = createTool({
+  id: 'draft_expert',
+  description: '',
+  inputSchema: z.object({
+    need: z.string().describe('主人对专家的需求描述'),
+    based_on: z.string().optional().describe('基于哪位已有专家修改（可选，名称或 id）'),
+  }),
+  execute: async ({ need, based_on }: any) => {
+    try {
+      const p = await getPersona(E.DB);
+      let ref: any = null;
+      if (based_on) {
+        const { d, ready } = db(); await ready;
+        ref = await resolveExpert(d, String(based_on));
+        if (!ref) return { ok: false, reason: `没有这位专家：${based_on}` };
+      }
+      const builder = new Agent({
+        id: 'expert-forge', name: '专家工坊',
+        instructions: p.builder_prompt,
+        model: buildModelId(p) as any,
+      } as any);
+      const userMsg = ref
+        ? `基于现有专家【${ref.name}】的定义修改：${JSON.stringify(expertOut(ref))}\n\n新需求：${need}`
+        : `需求：${need}`;
+      const res: any = await builder.generate([{ role: 'user', content: userMsg }], { output: DraftSchema } as any);
+      let draft: any = (res as any)?.output ?? null;
+      if (!draft) {
+        const m = String(res?.text ?? '').match(/\{[\s\S]*\}/);
+        draft = m ? JSON.parse(m[0]) : null;
+      }
+      if (!draft?.name || !draft?.instructions) return { ok: false, reason: '工坊未能生成有效草案' };
+      const v = validateExpertDef(draft);
+      if (!v.ok) return { ok: false, reason: `草案未过自检：${v.error}` };
+      return { ok: true, summary: draft.rationale ?? '', draft };
+    } catch (e: any) {
+      return { ok: false, reason: String(e?.message ?? e).slice(0, 160) };
+    }
+  },
+});
+
+const save_expert_tool = createTool({
+  id: 'save_expert',
+  description: '',
+  inputSchema: z.object({
+    draft: z.any().describe('完整专家定义 JSON（draft_expert 产物，可含 overwrite:true 覆盖同 id）'),
+  }),
+  execute: async ({ draft }: any, ctx: any) => {
+    try {
+      const v = validateExpertDef(draft);
+      if (!v.ok) return { ok: false, reason: v.error };
+      const { d, ready } = db();
+      await ready;
+      const threadId = String(ctx?.agent?.threadId ?? '');
+      const owner: any = threadId ? await d.prepare('SELECT created_by FROM rooms WHERE id=?').bind(threadId).first() : null;
+      const ownerId = String(owner?.created_by ?? '');
+      if (!ownerId) return { ok: false, reason: '无法确定专家归属（缺少会话）' };
+      const existing = await resolveExpert(d, String(draft.id ?? draft.name ?? ''));
+      if (existing && draft.overwrite) {
+        const r: any = await updateExpert(d, existing.id, draft, ownerId);
+        return r?.error ? { ok: false, reason: r.error } : { ok: true, expert: expertOut(r), overwritten: true };
+      }
+      let id = String(draft.id ?? '').trim().replace(/[^\w-]/g, '').slice(0, 40);
+      if (existing) id = `${id || 'exp'}-${Date.now().toString(36).slice(-4)}`;
+      const r: any = await createExpert(d, ownerId, { ...draft, id: id || undefined });
+      return r?.error ? { ok: false, reason: r.error } : { ok: true, expert: expertOut(r) };
     } catch (e: any) {
       return { ok: false, reason: String(e?.message ?? e).slice(0, 160) };
     }
@@ -343,6 +435,8 @@ export async function syncEngineCopy(p?: { om_observe: string; om_reflect: strin
     (dispatch_to_sandbox as any).description = persona.tool_dispatch;
     (create_schedule_tool as any).description = persona.tool_schedule;
     (dispatch_expert_tool as any).description = persona.tool_expert;
+    (draft_expert_tool as any).description = persona.tool_forge;
+    (save_expert_tool as any).description = persona.tool_forge;
   } catch {}
 }
 
@@ -396,7 +490,7 @@ const orchestrator = new Agent({
     const p = await getPersona(E.DB);
     return { reasoning: p.model_effort } as any;
   },
-  tools: { dispatch_to_sandbox, dispatch_to_expert: dispatch_expert_tool, list_experts: list_experts_tool, create_schedule: create_schedule_tool, list_schedules: list_schedules_tool, delete_schedule: delete_schedule_tool },
+  tools: { dispatch_to_sandbox, dispatch_to_expert: dispatch_expert_tool, list_experts: list_experts_tool, draft_expert: draft_expert_tool, save_expert: save_expert_tool, create_schedule: create_schedule_tool, list_schedules: list_schedules_tool, delete_schedule: delete_schedule_tool },
   memory: memoryRef,
 });
 
@@ -839,18 +933,20 @@ export const mastra = new Mastra({
           const { d, ready } = db(); await ready;
           const row: any = await d.prepare(`UPDATE l2_tasks SET state='working', updated_at=?
             WHERE task_id=(SELECT task_id FROM l2_tasks WHERE state='queued' ORDER BY created_at LIMIT 1) AND state='queued'
-            RETURNING task_id, prompt, runtime, thread_id, kind, expert_id, instructions, resource_id`).bind(Date.now()).first();
+            RETURNING task_id, prompt, runtime, thread_id, kind, expert_id, instructions, resource_id, def_json`).bind(Date.now()).first();
           if (!row) return c.json({ task: null });
           // 专家模型在 claim 时从 agent_defs 取（指令已随任务快照；模型改动对未领取任务即时生效）
           let model: string | null = null;
           if (row.expert_id) {
             try { model = ((await d.prepare('SELECT model FROM agent_defs WHERE id=?').bind(row.expert_id).first()) as any)?.model ?? null; } catch {}
           }
+          let def: any = null;
+          try { def = row.def_json ? JSON.parse(row.def_json) : null; } catch {}
           console.log('[L1] claimed', JSON.stringify({ taskId: row.task_id, kind: row.kind ?? 'sandbox' }));
           return c.json({ task: {
             taskId: row.task_id, prompt: row.prompt ?? '', runtime: row.runtime ?? 'cloud', threadId: row.thread_id,
             kind: row.kind ?? 'sandbox', expertId: row.expert_id ?? null, instructions: row.instructions ?? null,
-            resourceId: row.resource_id ?? null, model,
+            resourceId: row.resource_id ?? null, model, def,
           } });
         },
       } as any),

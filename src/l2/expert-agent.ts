@@ -1,13 +1,42 @@
 /**
- * L2 专家 = Mastra Agent（l2-experts S2.5，对齐 AGENTS.md 的 buildL2Agent 口径）：
- * agent_defs 的指令快照起一个 Mastra Agent，配本地 LibSQL 记忆——threadId 与 L1 一一对应
- * （同房间/主题的任务共享一条 L2 记忆线，不同房间互不串）。结果经 compose 回流 L1（权威记忆）。
+ * L2 专家 JIT 工厂（expert-forge S2.1，AGENTS.md buildL2Agent 口径）：
+ * 专家定义即数据——agent_defs 快照（提示词/tools/mcp/skill/memory）按名现场构建 Mastra Agent，
+ * threadId 与 L1 一一对应（同房间共享记忆线，跨房间不串），结果经 compose 回流 L1（权威记忆）。
+ * 实例按 def.id+updated_at 缓存；MCP client 每任务独立生命周期。
  */
 import { Agent } from '@mastra/core/agent';
+import { createSkill } from '@mastra/core/skills';
 import { Memory } from '@mastra/memory';
 import { LibSQLStore } from '@mastra/libsql';
+import { MCPClient } from '@mastra/mcp';
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { resolveTools } from './tools-registry.js';
+
+/** agent_defs 行快照（与 packages/shared ExpertDefSnapshot 同构；JSON 字段为字符串）。 */
+export type ExpertDefSnapshot = {
+  id?: string | null;
+  name?: string | null;
+  description?: string | null;
+  instructions?: string | null;
+  model?: string | null;
+  tools_json?: string | null;
+  mcp_json?: string | null;
+  skills_json?: string | null;
+  memory_json?: string | null;
+  updated_at?: number | null;
+};
+
+export type L2ExpertTask = {
+  prompt: string;
+  expertId?: string | null;
+  instructions?: string | null;
+  model?: string | null;
+  name?: string | null;
+  threadId?: string | null;
+  resourceId?: string | null;
+  def?: ExpertDefSnapshot | null;
+};
 
 let storeP: Promise<any> | null = null;
 function localStore() {
@@ -21,35 +50,98 @@ function localStore() {
 
 const FALLBACK_INSTRUCTIONS = '你是专家助手，用中文简短、结构化回复。';
 
-export type L2ExpertTask = {
-  prompt: string;
-  expertId?: string | null;
-  instructions?: string | null;
-  model?: string | null;
-  name?: string | null;
-  threadId?: string | null;
-  resourceId?: string | null;
-};
+function parseJson<T>(v: unknown): T | null {
+  if (v == null || v === '') return null;
+  if (typeof v === 'object') return v as T;
+  try { return JSON.parse(String(v)) as T; } catch { return null; }
+}
 
-/** 由专家定义 + 任务上下文构造 L2 Mastra Agent。 */
-export async function buildL2Agent(def: { id?: string | null; name?: string | null; instructions?: string | null; model?: string | null }): Promise<InstanceType<typeof Agent>> {
-  const store = await localStore();
-  return new Agent({
-    id: `l2-${def.id ?? 'expert'}`,
-    name: String(def.name ?? 'expert'),
-    instructions: String(def.instructions || FALLBACK_INSTRUCTIONS),
-    model: (def.model || process.env.L2_EXPERT_MODEL || 'deepseek/deepseek-chat') as any,
-    memory: new Memory({ storage: store as any, options: { lastMessages: 20 } }),
+/** memory_json → Memory options（workingMemory 模板 / semanticRecall / OM 透传）。 */
+function buildMemory(memoryJson: unknown): InstanceType<typeof Memory> {
+  const opts = parseJson<any>(memoryJson) ?? {};
+  return new Memory({
+    storage: localStore() as any,
+    options: {
+      lastMessages: Number(opts.lastMessages) > 0 ? Number(opts.lastMessages) : 20,
+      ...(opts.workingMemory ? { workingMemory: opts.workingMemory } : {}),
+      ...(opts.semanticRecall ? { semanticRecall: opts.semanticRecall } : {}),
+      ...(opts.observationalMemory ? { observationalMemory: opts.observationalMemory } : {}),
+    },
   } as any) as any;
 }
 
-/** 真执行：Mastra Agent + thread 对齐记忆。 */
+/** skills_json → createSkill 内联技能（按需加载）。 */
+function buildSkills(skillsJson: unknown): any[] {
+  const list = parseJson<any[]>(skillsJson);
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter((s) => s && typeof s.name === 'string' && typeof s.instructions === 'string')
+    .map((s) => createSkill({
+      name: String(s.name).slice(0, 60),
+      description: String(s.description ?? '').slice(0, 200) || '按需加载的专家技能',
+      instructions: String(s.instructions).slice(0, 8000),
+    }));
+}
+
+type McpConfig = { servers?: Record<string, { url?: string; command?: string; args?: string[]; env?: Record<string, string>; requireToolApproval?: boolean }> };
+
+/** mcp_json → 每任务独立 MCPClient（env 仅字面值；secret: 引用递延见 spec S3）。 */
+function buildMcpClient(mcpJson: unknown): InstanceType<typeof MCPClient> | null {
+  const cfg = parseJson<McpConfig>(mcpJson);
+  if (!cfg?.servers || !Object.keys(cfg.servers).length) return null;
+  const servers: Record<string, any> = {};
+  for (const [name, s] of Object.entries(cfg.servers)) {
+    const env = s.env ?? {};
+    for (const [k, v] of Object.entries(env)) {
+      if (String(v).startsWith('secret:')) throw new Error(`MCP env ${k} 使用了 secret: 引用——明文管道未接通，请先填字面值`);
+    }
+    servers[name] = s.command
+      ? { command: s.command, args: s.args ?? [], env, inheritDefaultEnv: false }
+      : { url: new URL(String(s.url)), requestInit: { headers: {} }, requireToolApproval: s.requireToolApproval };
+  }
+  return new MCPClient({ id: `l2-mcp-${Date.now().toString(36)}`, servers } as any) as any;
+}
+
+const agentCache = new Map<string, InstanceType<typeof Agent>>();
+
+/** def → Mastra Agent（JIT 装配；按 def.id+updated_at 缓存实例）。 */
+export async function buildL2Agent(def: ExpertDefSnapshot): Promise<InstanceType<typeof Agent>> {
+  const key = `${def.id ?? 'anon'}:${def.updated_at ?? 0}`;
+  const hit = agentCache.get(key);
+  if (hit) return hit;
+  const skills = buildSkills(def.skills_json);
+  const tools = resolveTools(def.tools_json);
+  const agent = new Agent({
+    id: `l2-${def.id ?? def.name ?? 'expert'}`,
+    name: String(def.name ?? 'expert'),
+    instructions: String(def.instructions || FALLBACK_INSTRUCTIONS),
+    model: (def.model || process.env.L2_EXPERT_MODEL || 'deepseek/deepseek-chat') as any,
+    ...(Object.keys(tools).length ? { tools } : {}),
+    ...(skills.length ? { skills } : {}),
+    memory: buildMemory(def.memory_json),
+  } as any) as any;
+  agentCache.set(key, agent);
+  return agent;
+}
+
+/** 真执行：JIT 构建 + thread 对齐记忆 +（可选）MCP toolsets。 */
 export async function runExpertAgent(task: L2ExpertTask): Promise<string> {
-  const agent = await buildL2Agent({ id: task.expertId, name: task.name, instructions: task.instructions, model: task.model });
+  const def: ExpertDefSnapshot = task.def ?? {
+    id: task.expertId, name: task.name, instructions: task.instructions, model: task.model,
+    updated_at: 0,
+  };
+  const agent = await buildL2Agent(def);
   const threadId = String(task.threadId || `expert-${Date.now()}`);
   const resourceId = String(task.resourceId || 'user:master');
-  const res: any = await agent.generate([{ role: 'user', content: String(task.prompt).slice(0, 20000) }], {
-    memory: { thread: threadId, resource: resourceId },
-  } as any);
-  return String(res?.text ?? '').trim() || '(empty expert reply)';
+  const mcp = buildMcpClient(def.mcp_json);
+  try {
+    const extra = mcp ? { toolsets: await (mcp as any).listToolsets() } : {};
+    const res: any = await agent.generate([{ role: 'user', content: String(task.prompt).slice(0, 20000) }], {
+      memory: { thread: threadId, resource: resourceId },
+      ...extra,
+    } as any);
+    return String(res?.text ?? '').trim() || '(empty expert reply)';
+  } finally {
+    if (mcp) { try { await (mcp as any).disconnect(); } catch {} }
+  }
 }
