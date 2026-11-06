@@ -59,8 +59,11 @@ export function expertOut(r: any) {
   };
 }
 
-export async function listExperts(db: any): Promise<ExpertDef[]> {
-  const { results } = await db.prepare('SELECT * FROM agent_defs ORDER BY created_at ASC').all();
+export async function listExperts(db: any, userId?: string): Promise<ExpertDef[]> {
+  // owner 范围（评审 CRITICAL）：本人 + 出厂种子（'system' 共享）；不传 userId 时给全量（L1 工具视角）
+  const { results } = userId
+    ? await db.prepare('SELECT * FROM agent_defs WHERE owner_user_id IN (?, ?) ORDER BY created_at ASC').bind(userId, 'system').all()
+    : await db.prepare('SELECT * FROM agent_defs ORDER BY created_at ASC').all();
   return (results ?? []) as ExpertDef[];
 }
 
@@ -78,6 +81,8 @@ export async function createExpert(db: any, ownerUserId: string, input: any): Pr
   if (!name) return { error: 'name required' };
   if (!instructions) return { error: 'instructions required' };
   const id = String(input?.id ?? '').trim().replace(/[^\w-]/g, '').slice(0, 40) || `exp-${crypto.randomUUID().slice(0, 8)}`;
+  const dup: any = await db.prepare('SELECT id FROM agent_defs WHERE id = ?').bind(id).first();
+  if (dup) return { error: `id already exists: ${id}` };
   const row: ExpertDef = {
     id, owner_user_id: ownerUserId, name,
     description: String(input?.description ?? '').trim().slice(0, LIMITS.description),
@@ -93,9 +98,10 @@ export async function createExpert(db: any, ownerUserId: string, input: any): Pr
   return row;
 }
 
-export async function updateExpert(db: any, id: string, input: any): Promise<ExpertDef | null | { error: string }> {
-  const cur: any = await db.prepare('SELECT * FROM agent_defs WHERE id = ?').bind(id).first();
+export async function updateExpert(db: any, id: string, input: any, userId: string): Promise<ExpertDef | null | { error: string }> {
+  const cur: any = await db.prepare('SELECT * FROM agent_defs WHERE id = ? AND owner_user_id IN (?, ?)').bind(id, userId, 'system').first();
   if (!cur) return null;
+  if (input?.name !== undefined && !String(input.name).trim()) return { error: 'name required' };
   const fields: string[] = [];
   const args: unknown[] = [];
   const put = (col: string, v: unknown, max: number) => {
@@ -114,7 +120,8 @@ export async function updateExpert(db: any, id: string, input: any): Promise<Exp
   return (await db.prepare('SELECT * FROM agent_defs WHERE id = ?').bind(id).first()) as ExpertDef;
 }
 
-export async function deleteExpert(db: any, id: string): Promise<boolean> {
-  const u = await db.prepare('DELETE FROM agent_defs WHERE id = ?').bind(id).run();
+export async function deleteExpert(db: any, id: string, userId: string): Promise<boolean> {
+  // 只删本人的自定义专家；出厂种子（'system'）共享可改不可删
+  const u = await db.prepare('DELETE FROM agent_defs WHERE id = ? AND owner_user_id = ?').bind(id, userId).run();
   return Number(u?.meta?.changes ?? 0) > 0;
 }

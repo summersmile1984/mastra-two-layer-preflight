@@ -202,11 +202,12 @@ const dispatch_expert_tool = createTool({
       if (!def) return { ok: false, reason: `没有这位专家：${expert}（用 list_experts 查看目录）` };
       const threadId = String(ctx?.agent?.threadId ?? '');
       const resourceId = String(ctx?.agent?.resourceId ?? '');
+      if (!E.PUSH_TOKEN) return { ok: false, reason: '后台回调未配置（PUSH_TOKEN 未设置）' };
       if (!threadId) return { ok: false, reason: '缺少会话 thread，无法派发' };
       const taskId = `t-${crypto.randomUUID()}`;
       const now = Date.now();
       await d.prepare('INSERT INTO l2_tasks (task_id,thread_id,resource_id,runtime,state,prompt,created_at,updated_at,kind,expert_id,instructions) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
-        .bind(taskId, threadId, resourceId, runtime, 'queued', String(task).slice(0, 20000), now, now, 'expert', def.id, def.instructions)
+        .bind(taskId, threadId, resourceId || null, runtime, 'queued', String(task).slice(0, 20000), now, now, 'expert', def.id, def.instructions)
         .run();
       try { await notifyRoom(threadId, { kind: 'busy' }); } catch {}
       return { ok: true, status: 'queued', expert: def.name, expertId: def.id, taskId };
@@ -597,7 +598,7 @@ export const mastra = new Mastra({
           if (!u) return c.json({ error: 'unauthorized' }, 401);
           const { d, ready } = db();
           await ready;
-          return c.json({ experts: (await listExperts(d)).map(expertOut) });
+          return c.json({ experts: (await listExperts(d, String(u.id))).map(expertOut) });
         },
       } as any),
       registerApiRoute('/agent-defs', {
@@ -609,8 +610,12 @@ export const mastra = new Mastra({
           const body: any = await c.req.json().catch(() => ({}));
           const { d, ready } = db();
           await ready;
-          const r = await createExpert(d, String(u.id), body);
-          return (r as any).error ? c.json({ error: (r as any).error }, 400) : c.json({ expert: expertOut(r) }, 201);
+          try {
+            const r = await createExpert(d, String(u.id), body);
+            return (r as any).error ? c.json({ error: (r as any).error }, 400) : c.json({ expert: expertOut(r) }, 201);
+          } catch (e: any) {
+            return c.json({ error: String(e?.message ?? e).slice(0, 160) }, 400);
+          }
         },
       } as any),
       registerApiRoute('/agent-defs/:id', {
@@ -622,7 +627,7 @@ export const mastra = new Mastra({
           const body: any = await c.req.json().catch(() => ({}));
           const { d, ready } = db();
           await ready;
-          const r = await updateExpert(d, String(c.req.param('id') ?? ''), body);
+          const r = await updateExpert(d, String(c.req.param('id') ?? ''), body, String(u.id));
           if (!r) return c.json({ error: 'not found' }, 404);
           return c.json((r as any).error ? { error: (r as any).error } : { expert: expertOut(r) }, (r as any).error ? 400 : 200);
         },
@@ -635,7 +640,7 @@ export const mastra = new Mastra({
           if (!u) return c.json({ error: 'unauthorized' }, 401);
           const { d, ready } = db();
           await ready;
-          const okDel = await deleteExpert(d, String(c.req.param('id') ?? ''));
+          const okDel = await deleteExpert(d, String(c.req.param('id') ?? ''), String(u.id));
           return c.json(okDel ? { ok: true } : { error: 'not found' }, okDel ? 200 : 404);
         },
       } as any),

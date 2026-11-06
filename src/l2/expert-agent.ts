@@ -45,10 +45,10 @@ export async function buildL2Agent(def: { id?: string | null; name?: string | nu
 
 /** 真执行：Mastra Agent + thread 对齐记忆。 */
 export async function runExpertAgent(task: L2ExpertTask): Promise<string> {
-  const agent = await buildL2Agent(task);
+  const agent = await buildL2Agent({ id: task.expertId, name: task.name, instructions: task.instructions, model: task.model });
   const threadId = String(task.threadId || `expert-${Date.now()}`);
   const resourceId = String(task.resourceId || 'user:master');
-  const res: any = await agent.generate([{ role: 'user', content: String(task.prompt).slice(0, 6000) }], {
+  const res: any = await agent.generate([{ role: 'user', content: String(task.prompt).slice(0, 20000) }], {
     memory: { thread: threadId, resource: resourceId },
   } as any);
   return String(res?.text ?? '').trim() || '(empty expert reply)';
