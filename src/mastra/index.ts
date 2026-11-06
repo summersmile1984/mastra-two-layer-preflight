@@ -309,9 +309,20 @@ const save_expert_tool = createTool({
       const owner: any = threadId ? await d.prepare('SELECT created_by FROM rooms WHERE id=?').bind(threadId).first() : null;
       const ownerId = String(owner?.created_by ?? '');
       if (!ownerId) return { ok: false, reason: '无法确定专家归属（缺少会话）' };
+      // HITL 硬闸（评审 MAJOR）：permissions 默认 ask → 最近一条用户消息必须含确认词；deny 直接拒
+      const rule: any = await d.prepare("SELECT policy FROM user_permission_rules WHERE user_id=? AND category_or_tool='save_expert'").bind(ownerId).first();
+      const policy = String(rule?.policy ?? 'ask');
+      if (policy === 'deny') return { ok: false, reason: '主人已禁止保存专家定义（permissions: deny）' };
+      if (policy !== 'allow') {
+        const last: any = threadId ? await d.prepare("SELECT content FROM messages WHERE room_id=? AND role='user' ORDER BY created_at DESC LIMIT 1").bind(threadId).first() : null;
+        if (!/确认|同意|就这样|可以了|approved/i.test(String(last?.content ?? ''))) {
+          return { ok: false, reason: '需要主人明确确认后才能保存专家定义——请主人在对话里说「确认保存」后再试' };
+        }
+      }
       const existing = await resolveExpert(d, String(draft.id ?? draft.name ?? ''));
       if (existing && draft.overwrite) {
         const r: any = await updateExpert(d, existing.id, draft, ownerId);
+        if (!r) return { ok: false, reason: '覆盖失败：专家不存在或无权修改' };
         return r?.error ? { ok: false, reason: r.error } : { ok: true, expert: expertOut(r), overwritten: true };
       }
       let id = String(draft.id ?? '').trim().replace(/[^\w-]/g, '').slice(0, 40);

@@ -120,6 +120,8 @@ export async function buildL2Agent(def: ExpertDefSnapshot): Promise<InstanceType
   const key = `${def.id ?? 'anon'}:${def.updated_at ?? 0}`;
   const hit = agentCache.get(key);
   if (hit) return hit;
+  // 同 def.id 只保留最新一份（评审 MINOR：缓存不失效旧条目）
+  for (const k of [...agentCache.keys()]) if (k !== key && k.startsWith(`${def.id ?? 'anon'}:`)) agentCache.delete(k);
   const skills = buildSkills(def.skills_json);
   const tools = resolveTools(def.tools_json);
   const agent = new Agent({

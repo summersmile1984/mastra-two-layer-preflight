@@ -56,6 +56,7 @@ export async function ensureAgentDefs(db: any): Promise<void> {
 }
 
 export function expertOut(r: any) {
+  if (!r) return null;
   const parse = (v: unknown) => {
     if (v == null) return null;
     try { return JSON.parse(String(v)); } catch { return null; }
@@ -68,12 +69,12 @@ export function expertOut(r: any) {
 }
 
 const LIMITS_JSON = 8000;
-/** 归一化 JSON 配置字段：对象/数组序列化，字符串直存，超长截断拒绝。 */
+/** 归一化 JSON 配置字段：对象/数组序列化；非法或超长直接抛错（评审 MAJOR：静默置 null 会丢配置）。 */
 function jsonField(v: unknown): string | null {
   if (v == null || v === '') return null;
   const s = typeof v === 'string' ? v : JSON.stringify(v);
-  if (s.length > LIMITS_JSON) return null;
-  try { JSON.parse(s); } catch { return null; }
+  if (s.length > LIMITS_JSON) throw new Error(`json field too large (>${LIMITS_JSON})`);
+  try { JSON.parse(s); } catch { throw new Error('json field invalid'); }
   return s;
 }
 
@@ -177,7 +178,9 @@ export function validateExpertDef(d: any): { ok: true } | { ok: false; error: st
   if (d?.model && String(d.model).length > LIMITS.model) return { ok: false, error: `model 超长（>${LIMITS.model}）` };
   const tools = d?.tools_json;
   if (tools != null && tools !== '') {
-    const list = typeof tools === 'string' ? JSON.parse(tools) : tools;
+    let list: any;
+    try { list = typeof tools === 'string' ? JSON.parse(tools) : tools; } catch { return { ok: false, error: 'tools_json 非法 JSON' }; }
+    if (String(typeof tools === 'string' ? tools : JSON.stringify(tools)).length > LIMITS_JSON) return { ok: false, error: `tools_json 超长（>${LIMITS_JSON}）` };
     if (!Array.isArray(list)) return { ok: false, error: 'tools_json 须为数组' };
     for (const t of list) {
       const id = typeof t === 'string' ? t : t?.id;
@@ -186,7 +189,9 @@ export function validateExpertDef(d: any): { ok: true } | { ok: false; error: st
   }
   const skills = d?.skills_json;
   if (skills != null && skills !== '') {
-    const list = typeof skills === 'string' ? JSON.parse(skills) : skills;
+    let list: any;
+    try { list = typeof skills === 'string' ? JSON.parse(skills) : skills; } catch { return { ok: false, error: 'skills_json 非法 JSON' }; }
+    if (String(typeof skills === 'string' ? skills : JSON.stringify(skills)).length > LIMITS_JSON) return { ok: false, error: `skills_json 超长（>${LIMITS_JSON}）` };
     if (!Array.isArray(list)) return { ok: false, error: 'skills_json 须为数组' };
     for (const s of list) {
       if (!s || typeof s.name !== 'string' || typeof s.instructions !== 'string') {
@@ -198,6 +203,7 @@ export function validateExpertDef(d: any): { ok: true } | { ok: false; error: st
   if (mcp != null && mcp !== '') {
     let cfg: any = mcp;
     if (typeof mcp === 'string') { try { cfg = JSON.parse(mcp); } catch { return { ok: false, error: 'mcp_json 非法 JSON' }; } }
+    if (String(typeof mcp === 'string' ? mcp : JSON.stringify(mcp)).length > LIMITS_JSON) return { ok: false, error: `mcp_json 超长（>${LIMITS_JSON}）` };
     if (typeof cfg !== 'object' || !cfg.servers || typeof cfg.servers !== 'object') return { ok: false, error: 'mcp_json 须含 servers' };
     const allowed = new Set(['url', 'command', 'args', 'env', 'requireToolApproval']);
     for (const s of Object.values<any>(cfg.servers)) {
@@ -205,6 +211,13 @@ export function validateExpertDef(d: any): { ok: true } | { ok: false; error: st
       if (!s.url && !s.command) return { ok: false, error: 'mcp server 须含 url 或 command' };
       for (const k of Object.keys(s)) if (!allowed.has(k)) return { ok: false, error: `mcp server 不支持字段 ${k}` };
     }
+  }
+  const mem = d?.memory_json;
+  if (mem != null && mem !== '') {
+    let cfg: any = mem;
+    if (typeof mem === 'string') { try { cfg = JSON.parse(mem); } catch { return { ok: false, error: 'memory_json 非法 JSON' }; } }
+    if (String(typeof mem === 'string' ? mem : JSON.stringify(mem)).length > LIMITS_JSON) return { ok: false, error: `memory_json 超长（>${LIMITS_JSON}）` };
+    if (typeof cfg !== 'object') return { ok: false, error: 'memory_json 须为对象' };
   }
   return { ok: true };
 }

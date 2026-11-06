@@ -12,7 +12,10 @@ const MAX_BYTES = 512 * 1024;
 const TIMEOUT_MS = 15_000;
 
 function isPrivateIp(ip: string): boolean {
-  if (ip === '::1' || ip === '0.0.0.0') return true;
+  if (ip === '::' || ip === '::1' || ip === '0.0.0.0') return true;
+  // IPv4-mapped IPv6（::ffff:127.0.0.1 等）先还原成 IPv4 再判（评审 MAJOR）
+  const mapped = ip.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i);
+  if (mapped) return isPrivateIp(mapped[1]);
   if (/^fc|^fd|^fe80/i.test(ip)) return true; // IPv6 ULA / link-local
   const m = ip.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
   if (!m) return false;
@@ -46,16 +49,24 @@ export const webFetchTool = createTool({
   description: '抓取一个公开网页（http/https）并返回文本内容（截断至 64KB）。用于查资料、读文档。',
   inputSchema: z.object({ url: z.string().describe('要抓取的 URL') }),
   execute: async ({ url }: { url: string }) => {
-    const u = await assertPublicHttp(url);
-    const r = await fetch(u, withProxy({
-      method: 'GET',
-      redirect: 'follow',
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-      headers: { 'user-agent': 'MastraL2Expert/0.3' },
-    }));
-    const buf = Buffer.from(await r.arrayBuffer());
+    // 重定向逐跳校验（评审 MAJOR：redirect:'follow' 会被 302 带进内网）
+    let current: URL = await assertPublicHttp(url);
+    let r: Response | null = null;
+    for (let hop = 0; hop <= 3; hop++) {
+      r = await fetch(current, withProxy({
+        method: 'GET', redirect: 'manual',
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+        headers: { 'user-agent': 'MastraL2Expert/0.3' },
+      }));
+      if (![301, 302, 303, 307, 308].includes(r.status)) break;
+      const loc = r.headers.get('location');
+      if (!loc) break;
+      current = await assertPublicHttp(new URL(loc, current).toString());
+    }
+    const resp = r!;
+    const buf = Buffer.from(await resp.arrayBuffer());
     const text = buf.subarray(0, MAX_BYTES).toString('utf8');
-    return { ok: r.ok, status: r.status, url: String(u), bytes: buf.length, text: text.slice(0, 65536) };
+    return { ok: resp.ok, status: resp.status, url: String(current), bytes: buf.length, text: text.slice(0, 65536) };
   },
 });
 
