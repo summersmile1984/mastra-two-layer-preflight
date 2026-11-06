@@ -4,26 +4,30 @@
  */
 import { createTool } from '@mastra/core/tools';
 import { lookup } from 'node:dns/promises';
-import { isIP } from 'node:net';
+import { isIP, BlockList } from 'node:net';
 import { z } from 'zod';
 import { withProxy } from './proxy-fetch.js';
 
 const MAX_BYTES = 512 * 1024;
 const TIMEOUT_MS = 15_000;
 
-function isPrivateIp(ip: string): boolean {
-  if (ip === '::' || ip === '::1' || ip === '0.0.0.0') return true;
-  // IPv4-mapped IPv6（::ffff:127.0.0.1 等）先还原成 IPv4 再判（评审 MAJOR）
-  const mapped = ip.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i);
-  if (mapped) return isPrivateIp(mapped[1]);
-  if (/^fc|^fd|^fe80/i.test(ip)) return true; // IPv6 ULA / link-local
-  const m = ip.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
-  if (!m) return false;
-  const [a, b] = [Number(m[1]), Number(m[2])];
-  return a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
+// SSRF 黑名单（评审：WHATWG 会把 ::ffff:127.0.0.1 规范化成 ::ffff:7f00:1，
+// 手写正则必漏；BlockList 对 IPv4-mapped IPv6 有内建识别，未识别 IP 一律拒）。
+const blocklist = new BlockList();
+for (const [net, prefix] of [['127.0.0.0', 8], ['10.0.0.0', 8], ['172.16.0.0', 12], ['192.168.0.0', 16], ['169.254.0.0', 16], ['0.0.0.0', 8]] as const) {
+  blocklist.addSubnet(net, prefix, 'ipv4');
+}
+for (const [net, prefix] of [['::1', 128], ['::', 128], ['fc00::', 7], ['fe80::', 10]] as const) {
+  blocklist.addSubnet(net, prefix, 'ipv6');
 }
 
-async function assertPublicHttp(urlStr: string): Promise<URL> {
+function isPrivateIp(ip: string): boolean {
+  const fam = isIP(ip);
+  if (!fam) return true; // 解析不了当内网拒（fail-closed）
+  return blocklist.check(ip, fam === 6 ? 'ipv6' : 'ipv4');
+}
+
+export async function assertPublicHttp(urlStr: string): Promise<URL> {
   let u: URL;
   try { u = new URL(urlStr); } catch { throw new Error('无效 URL'); }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('仅允许 http/https');

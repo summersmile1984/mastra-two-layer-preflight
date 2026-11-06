@@ -732,9 +732,13 @@ export const mastra = new Mastra({
           const body: any = await c.req.json().catch(() => ({}));
           const { d, ready } = db();
           await ready;
-          const r = await updateExpert(d, String(c.req.param('id') ?? ''), body, String(u.id));
-          if (!r) return c.json({ error: 'not found' }, 404);
-          return c.json((r as any).error ? { error: (r as any).error } : { expert: expertOut(r) }, (r as any).error ? 400 : 200);
+          try {
+            const r = await updateExpert(d, String(c.req.param('id') ?? ''), body, String(u.id));
+            if (!r) return c.json({ error: 'not found' }, 404);
+            return c.json((r as any).error ? { error: (r as any).error } : { expert: expertOut(r) }, (r as any).error ? 400 : 200);
+          } catch (e: any) {
+            return c.json({ error: String(e?.message ?? e).slice(0, 160) }, 400);
+          }
         },
       } as any),
       registerApiRoute('/agent-defs/:id', {
