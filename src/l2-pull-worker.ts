@@ -4,6 +4,7 @@
  * Env: L1_PULL_URL, PUSH_TOKEN, L2_PULL_INTERVAL_MS(2000), ACP_DRY_RUN(可选), DEEPSEEK_API_KEY(专家优先)
  */
 import { runAcpPrompt } from './l2/a2a-l2.js';
+import { runExpertAgent } from './l2/expert-agent.js';
 import { runCuaTask } from './l2/cua-cli.js';
 import { withProxy, resolveProxyUrl } from './l2/proxy-fetch.js';
 
@@ -17,6 +18,7 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 type Claimed = {
   taskId: string; prompt?: string; runtime?: string; kind?: string;
   expertId?: string | null; instructions?: string | null; threadId?: string;
+  resourceId?: string | null; model?: string | null;
 };
 
 function resolveKind(t: Claimed): 'expert' | 'cua' | 'acp' {
@@ -30,33 +32,12 @@ function resolveKind(t: Claimed): 'expert' | 'cua' | 'acp' {
 }
 
 async function runExpert(t: Claimed): Promise<string> {
-  const instructions = String(t.instructions || '你是助手，用中文简短、结构化回复。不要加 [agent:…] 标记。').slice(0, 8000);
-  const prompt = String(t.prompt || '').slice(0, 6000);
-  const key = process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY || '';
-  if (key) {
-    const base = process.env.DEEPSEEK_API_KEY
-      ? 'https://api.deepseek.com/chat/completions'
-      : (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1') + '/chat/completions';
-    const model = process.env.DEEPSEEK_API_KEY ? 'deepseek-chat' : (process.env.OPENAI_MODEL || 'gpt-4o-mini');
-    const r = await fetch(base, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: 'system', content: instructions },
-          { role: 'user', content: prompt },
-        ],
-        max_tokens: 2000,
-      }),
-      signal: AbortSignal.timeout(120000),
-    });
-    const j: any = await r.json().catch(() => null);
-    if (!r.ok) throw new Error(`expert LLM HTTP ${r.status} ${JSON.stringify(j)?.slice(0, 200)}`);
-    return String(j?.choices?.[0]?.message?.content ?? '').trim() || '(empty expert reply)';
-  }
-  // Fallback: ACP with prefixed instructions (no Mac LLM key)
-  return runAcpPrompt(`【专家指令】\n${instructions}\n\n【用户任务】\n${prompt}`, 'cloud');
+  // L2 专家 = Mastra Agent + thread 对齐本地记忆（l2-experts S2.5）
+  return runExpertAgent({
+    prompt: String(t.prompt || ''),
+    expertId: t.expertId, instructions: t.instructions, model: t.model,
+    threadId: t.threadId, resourceId: t.resourceId,
+  });
 }
 
 async function post(path: string, body: any) {

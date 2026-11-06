@@ -10,9 +10,12 @@ export type ClaimTask = {
   /** Derived on claim: expert | cua | acp. */
   kind?: TaskKind;
   threadId?: string;
+  resourceId?: string | null;
   expertId?: string | null;
   /** Expert system instructions when kind=expert (catalog / agent_defs). */
   instructions?: string | null;
+  /** Expert model override from agent_defs (claim-time lookup). */
+  model?: string | null;
 };
 
 export type ClaimResponse = {

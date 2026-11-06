@@ -6,8 +6,8 @@
  *   dispatch_to_sandbox 本地生成 task_id（t-<uuid>），D1 l2_tasks 写入 state=queued + prompt，立即 ok:true
  *     （只需 PUSH_TOKEN + thread；不要求 L2_A2A_URL 可达）
  *   本机 L2（src/l2-pull-worker.ts）轮询 POST /l2-claim（Bearer/X-A2A-Notification-Token = PUSH_TOKEN）
- *     → 原子 queued→working，返回 {taskId,prompt,runtime,threadId}（无任务 {task:null}）
- *     → runAcpPrompt（dsh --profile acp）→ POST /a2a-callback（A2A Task 形状）→ 下面原有 compose + /l2-results 不变
+ *     → 原子 queued→working，返回 {taskId,prompt,runtime,threadId,kind,expertId,instructions,resourceId,model}（无任务 {task:null}）
+ *     → expert 走 runExpertAgent（Mastra Agent+本地记忆），sandbox 走 runAcpPrompt（dsh --profile acp）→ POST /a2a-callback（A2A Task 形状）→ 下面原有 compose + /l2-results 不变
  *   若配置了 L2_A2A_URL：额外 best-effort A2A push（成功则改用 L2 的 task id；失败仅记日志，留给 pull）
  *
  * P2（Worker 侧派发 + 回调，现为可选 push 路径）：
@@ -44,6 +44,7 @@ import { ensureProfileTable, upsertProfile, resolveUserByName, loadRoomProfileBl
 import { ensurePersonaConfig, getPersona, updatePersona, personaBlock, buildThreadBlock, buildModelId, SEED_MODEL_ID } from './persona';
 import { indexThreadMessages } from './index-messages';
 import { ensureVaultTable, createVaultEntry, listVaultEntries, deleteVaultEntry, getVaultEntry, vaultOut, purgeExpiredVault } from './vault';
+import { ensureAgentDefs, listExperts, resolveExpert, createExpert, updateExpert, deleteExpert, expertOut } from './experts';
 import {
   listSchedules, getSchedule, createSchedule, updateSchedule, deleteSchedule,
   listRuns, dueSchedules, markRun, advanceSchedule, computeNextRunAt,
@@ -102,7 +103,12 @@ function db() {
       status TEXT NOT NULL, detail TEXT, created_at INTEGER NOT NULL)`).run())
     .then(() => d.prepare('CREATE INDEX IF NOT EXISTS schedules_due ON schedules(enabled, next_run_at)').run())
     .then(() => d.prepare('CREATE INDEX IF NOT EXISTS schedules_user ON schedules(user_id, enabled)').run())
-    .then(() => d.prepare('CREATE INDEX IF NOT EXISTS schedule_runs_sched ON schedule_runs(schedule_id, created_at)').run());
+    .then(() => d.prepare('CREATE INDEX IF NOT EXISTS schedule_runs_sched ON schedule_runs(schedule_id, created_at)').run())
+    .then(() => d.prepare('ALTER TABLE l2_tasks ADD COLUMN expert_id TEXT').run().catch(() => null))
+    .then(() => d.prepare('ALTER TABLE l2_tasks ADD COLUMN instructions TEXT').run().catch(() => null))
+    .then(() => d.prepare("ALTER TABLE l2_tasks ADD COLUMN kind TEXT DEFAULT 'sandbox'").run().catch(() => null))
+    .then(() => d.prepare('CREATE INDEX IF NOT EXISTS idx_l2_tasks_expert ON l2_tasks(expert_id, state)').run())
+    .then(() => ensureAgentDefs(d));
   return { d, ready: schemaReady };
 }
 
@@ -173,6 +179,52 @@ const create_schedule_tool = createTool({
         name, prompt, cron, timezone, target_type: 'room', target_id: threadId,
       });
       return { ok: true, schedule };
+    } catch (e: any) {
+      return { ok: false, reason: String(e?.message ?? e).slice(0, 160) };
+    }
+  },
+});
+
+// 专家派发工具（l2-experts S2.4）：任务进 l2_tasks(kind=expert)，L2（用户电脑/云电脑）执行
+const dispatch_expert_tool = createTool({
+  id: 'dispatch_to_expert',
+  description: '',
+  inputSchema: z.object({
+    expert: z.string().describe('专家名或 id（如 调研专家/researcher、工程师/coder）'),
+    task: z.string().describe('交给专家的任务内容'),
+    runtime: z.enum(['cloud', 'local']).default('local').describe('执行位：local=用户电脑，cloud=云电脑'),
+  }),
+  execute: async ({ expert, task, runtime }: any, ctx: any) => {
+    try {
+      const { d, ready } = db();
+      await ready;
+      const def = await resolveExpert(d, String(expert ?? ''));
+      if (!def) return { ok: false, reason: `没有这位专家：${expert}（用 list_experts 查看目录）` };
+      const threadId = String(ctx?.agent?.threadId ?? '');
+      const resourceId = String(ctx?.agent?.resourceId ?? '');
+      if (!threadId) return { ok: false, reason: '缺少会话 thread，无法派发' };
+      const taskId = `t-${crypto.randomUUID()}`;
+      const now = Date.now();
+      await d.prepare('INSERT INTO l2_tasks (task_id,thread_id,resource_id,runtime,state,prompt,created_at,updated_at,kind,expert_id,instructions) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+        .bind(taskId, threadId, resourceId, runtime, 'queued', String(task).slice(0, 20000), now, now, 'expert', def.id, def.instructions)
+        .run();
+      try { await notifyRoom(threadId, { kind: 'busy' }); } catch {}
+      return { ok: true, status: 'queued', expert: def.name, expertId: def.id, taskId };
+    } catch (e: any) {
+      return { ok: false, reason: String(e?.message ?? e).slice(0, 160) };
+    }
+  },
+});
+
+const list_experts_tool = createTool({
+  id: 'list_experts',
+  description: '查看 L2 专家目录（名称、专长说明）。',
+  inputSchema: z.object({}),
+  execute: async () => {
+    try {
+      const { d, ready } = db();
+      await ready;
+      return { ok: true, experts: (await listExperts(d)).map((e: any) => ({ id: e.id, name: e.name, description: e.description })) };
     } catch (e: any) {
       return { ok: false, reason: String(e?.message ?? e).slice(0, 160) };
     }
@@ -289,6 +341,7 @@ export async function syncEngineCopy(p?: { om_observe: string; om_reflect: strin
     if (tc?.observationalMemory) tc.observationalMemory.model = buildModelId(persona);
     (dispatch_to_sandbox as any).description = persona.tool_dispatch;
     (create_schedule_tool as any).description = persona.tool_schedule;
+    (dispatch_expert_tool as any).description = persona.tool_expert;
   } catch {}
 }
 
@@ -342,7 +395,7 @@ const orchestrator = new Agent({
     const p = await getPersona(E.DB);
     return { reasoning: p.model_effort } as any;
   },
-  tools: { dispatch_to_sandbox, create_schedule: create_schedule_tool, list_schedules: list_schedules_tool, delete_schedule: delete_schedule_tool },
+  tools: { dispatch_to_sandbox, dispatch_to_expert: dispatch_expert_tool, list_experts: list_experts_tool, create_schedule: create_schedule_tool, list_schedules: list_schedules_tool, delete_schedule: delete_schedule_tool },
   memory: memoryRef,
 });
 
@@ -533,6 +586,57 @@ export const mastra = new Mastra({
             gateways,
             effortLevels: ['provider-default', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
           });
+        },
+      } as any),
+      // L2 专家目录（l2-experts S2.2）：定义是数据，执行位在 L2
+      registerApiRoute('/agent-defs', {
+        method: 'GET',
+        requiresAuth: false,
+        handler: async (c: any) => {
+          const u = await getSessionUser(c.req.raw ?? { headers: c.req.headers }, E as any);
+          if (!u) return c.json({ error: 'unauthorized' }, 401);
+          const { d, ready } = db();
+          await ready;
+          return c.json({ experts: (await listExperts(d)).map(expertOut) });
+        },
+      } as any),
+      registerApiRoute('/agent-defs', {
+        method: 'POST',
+        requiresAuth: false,
+        handler: async (c: any) => {
+          const u = await getSessionUser(c.req.raw ?? { headers: c.req.headers }, E as any);
+          if (!u) return c.json({ error: 'unauthorized' }, 401);
+          const body: any = await c.req.json().catch(() => ({}));
+          const { d, ready } = db();
+          await ready;
+          const r = await createExpert(d, String(u.id), body);
+          return (r as any).error ? c.json({ error: (r as any).error }, 400) : c.json({ expert: expertOut(r) }, 201);
+        },
+      } as any),
+      registerApiRoute('/agent-defs/:id', {
+        method: 'PUT',
+        requiresAuth: false,
+        handler: async (c: any) => {
+          const u = await getSessionUser(c.req.raw ?? { headers: c.req.headers }, E as any);
+          if (!u) return c.json({ error: 'unauthorized' }, 401);
+          const body: any = await c.req.json().catch(() => ({}));
+          const { d, ready } = db();
+          await ready;
+          const r = await updateExpert(d, String(c.req.param('id') ?? ''), body);
+          if (!r) return c.json({ error: 'not found' }, 404);
+          return c.json((r as any).error ? { error: (r as any).error } : { expert: expertOut(r) }, (r as any).error ? 400 : 200);
+        },
+      } as any),
+      registerApiRoute('/agent-defs/:id', {
+        method: 'DELETE',
+        requiresAuth: false,
+        handler: async (c: any) => {
+          const u = await getSessionUser(c.req.raw ?? { headers: c.req.headers }, E as any);
+          if (!u) return c.json({ error: 'unauthorized' }, 401);
+          const { d, ready } = db();
+          await ready;
+          const okDel = await deleteExpert(d, String(c.req.param('id') ?? ''));
+          return c.json(okDel ? { ok: true } : { error: 'not found' }, okDel ? 200 : 404);
         },
       } as any),
       // 定时任务（schedules-secrets S2.1）：cron 例程，执行走 Workers cron tick
@@ -730,10 +834,19 @@ export const mastra = new Mastra({
           const { d, ready } = db(); await ready;
           const row: any = await d.prepare(`UPDATE l2_tasks SET state='working', updated_at=?
             WHERE task_id=(SELECT task_id FROM l2_tasks WHERE state='queued' ORDER BY created_at LIMIT 1) AND state='queued'
-            RETURNING task_id, prompt, runtime, thread_id`).bind(Date.now()).first();
+            RETURNING task_id, prompt, runtime, thread_id, kind, expert_id, instructions, resource_id`).bind(Date.now()).first();
           if (!row) return c.json({ task: null });
-          console.log('[L1] claimed', JSON.stringify({ taskId: row.task_id }));
-          return c.json({ task: { taskId: row.task_id, prompt: row.prompt ?? '', runtime: row.runtime ?? 'cloud', threadId: row.thread_id } });
+          // 专家模型在 claim 时从 agent_defs 取（指令已随任务快照；模型改动对未领取任务即时生效）
+          let model: string | null = null;
+          if (row.expert_id) {
+            try { model = ((await d.prepare('SELECT model FROM agent_defs WHERE id=?').bind(row.expert_id).first()) as any)?.model ?? null; } catch {}
+          }
+          console.log('[L1] claimed', JSON.stringify({ taskId: row.task_id, kind: row.kind ?? 'sandbox' }));
+          return c.json({ task: {
+            taskId: row.task_id, prompt: row.prompt ?? '', runtime: row.runtime ?? 'cloud', threadId: row.thread_id,
+            kind: row.kind ?? 'sandbox', expertId: row.expert_id ?? null, instructions: row.instructions ?? null,
+            resourceId: row.resource_id ?? null, model,
+          } });
         },
       } as any),
       // A2A push webhook（L2 → L1）。真实路径：/a2a-callback（无 /api 前缀）

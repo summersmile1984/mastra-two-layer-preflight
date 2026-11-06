@@ -1,7 +1,7 @@
 ---
 feature: l2-experts
-status: designed
-updated: 2026-11-05
+status: in-progress
+updated: 2026-11-06
 source: l2-experts
 ---
 
