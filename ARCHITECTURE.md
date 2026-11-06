@@ -51,3 +51,15 @@ curl localhost:4120/api/health   # 模式、模型、harness/chrome 是否可用
 - `src/server.ts`：L1+UI+callback。设置 `L2_A2A_URL` 即进入 split 模式，不再挂内置 L2 路由。
 - `src/l2-server.ts`：独立 L2（A2A handler + ACP harness），push 走 `L2_PUSH_ALLOWLIST` 或官方 DefaultPushNotificationSender。
 - `cf/worker.ts` + `wrangler.toml`：CF Workers L1 占位（health/回调/手动派发），完整移植清单见 DEPLOY-CF.md。
+
+## PC 桌面 App（2026-11-02）
+- **路径**：`apps/l2-desktop` — Tauri 2 + TypeScript（软浅色壳）。
+- **角色**：L2 执行位——本机 claim 循环（`src/main.ts`）→ `POST /l2-claim` → 专家（Mastra Agent）或 ACP（`runAcpPrompt`/`dsh`）或 CUA（`cua` CLI）→ `POST /a2a-callback`。
+- **配对**：`~/.config/mastra-l2/device.json`（l1Url / token / intervalMs）。
+- **开发**：`cd apps/l2-desktop && npm i && npm run tauri:dev`（需 Rust + Node；详见该目录 README）。
+- **非目标**：不克隆 Grok Bot 品牌资源；不做 Mastra Workflows。
+
+## L1 前端（2026-11-02）
+- **现行**：`apps/web` — Vite + React + TypeScript + Tailwind，软浅色产品风。
+- 构建产物经 `scripts/cf-postbuild.mjs` 写入 Workers Static Assets（站点根路径）。
+- 仍调用同一套 `/api/*`（auth / rooms / settings）；Mastra L1 留在 Workers。
